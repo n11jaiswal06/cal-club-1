@@ -1,5 +1,6 @@
 const MealService = require('./mealService');
 const RecommendationService = require('./recommendationService');
+const ActivityStoreService = require('./activityStoreService');
 const { findUserById } = require('../models/user');
 const User = require('../models/schemas/User');
 const Question = require('../models/schemas/Question');
@@ -135,12 +136,15 @@ class AppFormatService {
       
       // Get today's meals for logged widget
       const todayMeals = await this.getTodayMeals(userId, currentDate);
-      
+
       // Get recommendation widget data
       const recommendationWidget = await this.formatRecommendationWidget(userId);
 
       // Get membership status for paywall / membership info
       const membershipStatus = await checkMembership(userId);
+
+      // Get exercise data from ActivityStore (all sources: manual, apple_health, google_health)
+      const exerciseData = await this.getExerciseData(userId, istDateStr);
       
       // Format the response
       const widgets = [
@@ -171,7 +175,8 @@ class AppFormatService {
           isPremium: membershipStatus.isPremium,
           isInTrial: membershipStatus.isInTrial,
           expiresDate: membershipStatus.expiresDate
-        }
+        },
+        exerciseData: exerciseData
       };
     } catch (error) {
       throw new Error(`Failed to format app calendar data: ${error.message}`);
@@ -1072,6 +1077,62 @@ class AppFormatService {
         action: 'navigate_settings'
       }
     ];
+  }
+
+  /**
+   * Get exercise data from ActivityStore for a specific date
+   * Aggregates exercise data from all sources (manual, apple_health, google_health)
+   * @param {ObjectId} userId - User ID
+   * @param {string} date - Date in YYYY-MM-DD format
+   * @returns {Promise<Object>} Exercise data with total calories and logs
+   */
+  static async getExerciseData(userId, date) {
+    try {
+      // Query ActivityStore for ALL exercise data (all sources)
+      const exerciseStoreData = await ActivityStoreService.fetch(userId, date, {
+        category: 'EXERCISE'
+      });
+
+      // Flatten all exercises from all sources
+      const allExerciseLogs = [];
+      let totalCaloriesBurned = 0;
+
+      for (const doc of exerciseStoreData) {
+        const sourceData = doc.data || [];
+        for (const item of sourceData) {
+          const calories = item.calories_burned || 0;
+          totalCaloriesBurned += calories;
+
+          // Calculate duration from start_time and end_time if not provided
+          let durationMin = item.duration_min;
+          if (!durationMin && item.start_time && item.end_time) {
+            durationMin = Math.round((item.end_time - item.start_time) / 60000);
+          }
+
+          allExerciseLogs.push({
+            log_id: item.log_id || `${doc.source}_${item.start_time}`,
+            exercise_name: item.exercise_name || item.name || 'Exercise',
+            exercise_icon: item.exercise_icon || 'fitness_center',
+            intensity: item.intensity || 'moderate',
+            duration_min: durationMin || 0,
+            calories_burned: calories,
+            source: doc.source.toLowerCase()
+          });
+        }
+      }
+
+      return {
+        total_calories_burned: Math.round(totalCaloriesBurned),
+        logs: allExerciseLogs
+      };
+    } catch (error) {
+      console.error('Error fetching exercise data:', error);
+      // Return empty exercise data on error (don't break dashboard)
+      return {
+        total_calories_burned: 0,
+        logs: []
+      };
+    }
   }
 }
 
