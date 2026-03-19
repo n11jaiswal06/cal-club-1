@@ -1140,4 +1140,4 @@ class AppFormatService {
   }
 }
 
-module.exports = AppFormatService; 
+module.exports = AppFormatService;

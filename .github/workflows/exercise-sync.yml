@@ -1,0 +1,22 @@
+name: Exercise list sync check
+
+on:
+  pull_request:
+    paths:
+      - 'data/exerciseDatabase.js'
+      - 'scripts/check_exercise_sync.js'
+      - '.github/workflows/exercise-sync.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'data/exerciseDatabase.js'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node scripts/check_exercise_sync.js
