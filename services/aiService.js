@@ -700,6 +700,112 @@ Return only valid JSON, no additional text.`;
   }
 
   /**
+   * Enhanced Prompt 1 for V4: Adds itemType classification and category tagging
+   */
+  static async analyzeQuantityWithGeminiV4(imageUrl, hint) {
+    const modelName = 'gemini-2.5-flash';
+    console.log(`🤖 [GEMINI-V4-STEP1] Using model: ${modelName} for enhanced quantity analysis`);
+    const model = genAI.getGenerativeModel({
+      model: modelName,
+      generationConfig: { temperature: 0.1 }
+    });
+
+    const enhancedPrompt = `ROLE
+Food identification and portion estimation specialist with classification capabilities.
+
+INPUTS
+1. Image: Meal photo in served state.
+${hint ? `2. User Hint: "${hint}"` : ''}
+
+CLASSIFICATION REQUIREMENTS
+For each item, classify as:
+1. **itemType**: "composite_dish" or "single_item"
+   - composite_dish: User might eat components separately (butter chicken, biryani, omelet)
+   - single_item: Consumed as whole unit (dal makhani, pizza, rice)
+
+2. **category**: protein, grain, fat, vegetable, fruit, sauce, beverage, dairy, nuts, legumes, other
+
+COMPOSITE DISH HANDLING
+For composite_dish items:
+- Estimate serving size (0.5, 1, 1.5, 2 servings)
+- DO NOT estimate component quantities (recipe database will handle this)
+- Provide serving unit (bowl, plate, cup, piece)
+
+For single_item:
+- Provide category
+- Estimate display quantity (5 pieces, 2 cups, 1 tbsp)
+- Estimate grams
+
+QUANTITY ESTIMATION
+Same as existing rules: use cups, pieces, bowl sizes, etc.
+Gram estimation required for all items.
+
+OUTPUT
+Return ONLY raw JSON. No markdown, no explanation.
+
+{
+  "mealName": "Overall meal name",
+  "items": [
+    {
+      "name": "Item name",
+      "itemType": "composite_dish" | "single_item",
+      "category": "protein|grain|fat|vegetable|fruit|sauce|beverage|dairy|nuts|legumes|other",
+
+      // For composite_dish:
+      "servingSize": 1.5,
+      "servingUnit": "bowl",
+
+      // For single_item:
+      "quantity": { "value": 5, "unit": "pieces" },
+      "quantityAlternate": { "value": 250, "unit": "grams" },
+      "pieceWeight": 50,  // For proteins: 1 piece = Xg
+
+      "confidence": 0.9
+    }
+  ]
+}
+
+EXAMPLES
+
+Composite dish:
+{
+  "name": "Butter Chicken",
+  "itemType": "composite_dish",
+  "category": "protein",
+  "servingSize": 1,
+  "servingUnit": "bowl",
+  "confidence": 0.9
+}
+
+Simple item:
+{
+  "name": "Rice",
+  "itemType": "single_item",
+  "category": "grain",
+  "quantity": { "value": 1, "unit": "cup" },
+  "quantityAlternate": { "value": 180, "unit": "grams" },
+  "confidence": 0.9
+}
+
+Return only valid JSON, no additional text.`;
+
+    const parts = [{ text: enhancedPrompt }];
+    if (imageUrl) {
+      parts.push({ inlineData: { mimeType: 'image/jpeg', data: await this.fetchImageAsBase64(imageUrl) } });
+    }
+
+    const result = await model.generateContent(parts);
+    const response = await result.response;
+    const textResponse = response.text();
+    const tokens = {
+      input: result.response.usageMetadata?.promptTokenCount || null,
+      output: result.response.usageMetadata?.candidatesTokenCount || null
+    };
+
+    return { response: textResponse, tokens, provider: 'gemini', model: modelName };
+  }
+
+  /**
    * STEP 2: Given identified items with quantities, calculate nutrition / calories.
    * @param {Object} quantityResult - Parsed JSON from step 1 (mealName, items[{name, quantity, confidence}])
    */
@@ -1002,6 +1108,83 @@ Return only valid JSON, no additional text.`;
     } catch (error) {
       console.error(`❌ [V3] Pipeline failed: ${error.message}`);
       throw new Error(`Failed to analyze food (V3): ${error.message}`);
+    }
+  }
+
+  static async analyzeFoodCaloriesV4(imageUrl, hint, provider = 'gemini', userId = null, additionalData = {}) {
+    try {
+      const llmModel = 'gemini-2.5-flash';
+      const isTextOnly = !imageUrl && hint;
+
+      console.log(`🤖 [V4] ─── Starting V4 pipeline (DB-first with per-item waterfall) ───`);
+      console.log(`🤖 [V4] Input: imageUrl=${imageUrl ? 'yes' : 'no'}, hint=${hint ? `"${hint.substring(0, 80)}"` : 'no'}`);
+
+      // Step 1: Enhanced Prompt 1 - Meal identification + itemType classification
+      console.log(`🤖 [V4] Step 1: Enhanced Prompt 1 (with itemType classification)`);
+      const quantityRaw = await this.analyzeQuantityWithGeminiV4(imageUrl, hint);
+      const quantityParsed = this.parseAIResult(quantityRaw.response);
+      console.log(`🤖 [V4] Step 1 complete — ${quantityParsed.items.length} items identified, mealName="${quantityParsed.mealName}"`);
+
+      quantityParsed.items.forEach((item, i) => {
+        const itemType = item.itemType || 'single_item';
+        const category = item.category || 'unknown';
+        const grams = item.grams || item.quantityAlternate?.value || 'N/A';
+        console.log(`🤖 [V4]   item[${i}]: "${item.name}" | type=${itemType} | category=${category} | grams=${grams}`);
+      });
+
+      // Step 2: Per-item nutrition lookup with waterfall (USDA → IFCT → LLM cache → LLM)
+      console.log(`🤖 [V4] Step 2: Per-item waterfall lookup (USDA → IFCT → cache → LLM)`);
+      const NutritionLookupServiceV4 = require('./nutritionLookupServiceV4');
+      const nutritionResult = await NutritionLookupServiceV4.calculateNutrition(quantityParsed.items, llmModel);
+
+      console.log(`🤖 [V4] Step 2 complete — ${nutritionResult.items.length} items processed`);
+      console.log(`🤖 [V4] Source breakdown: USDA=${nutritionResult.sourceBreakdown.usda}, IFCT=${nutritionResult.sourceBreakdown.ifct}, cached=${nutritionResult.sourceBreakdown.llm_cached}, fresh=${nutritionResult.sourceBreakdown.llm_fresh}, recipe=${nutritionResult.sourceBreakdown.recipe}`);
+
+      nutritionResult.items.forEach((item, i) => {
+        const source = item.nutritionSource || 'unknown';
+        const cal = item.nutrition?.calories || 0;
+        console.log(`🤖 [V4]   result[${i}]: "${item.name}" | source=${source} | cal=${cal}`);
+      });
+
+      // Save meal with enhanced tracking
+      let savedMeal = null;
+      if (userId) {
+        const imageReference = imageUrl || (hint ? `text: ${hint}` : null);
+        console.log(`🤖 [V4] Saving meal for userId=${userId} with source tracking`);
+        savedMeal = await this.saveMealDataForV4(
+          userId,
+          imageReference,
+          {
+            mealName: quantityParsed.mealName,
+            items: nutritionResult.items,
+            totalNutrition: nutritionResult.totalNutrition
+          },
+          additionalData,
+          quantityRaw.tokens
+        );
+        console.log(`🤖 [V4] Meal saved: mealId=${savedMeal?._id}`);
+      }
+
+      const coverage = nutritionResult.coverage;
+      console.log(`🤖 [V4] Coverage: ${coverage.fromDatabase}/${coverage.total} from DB (${Math.round(coverage.fromDatabase / coverage.total * 100)}%)`);
+      console.log(`🤖 [V4] ─── V4 pipeline complete ───`);
+
+      return {
+        calories: {
+          mealName: quantityParsed.mealName,
+          items: nutritionResult.items,
+          totalNutrition: nutritionResult.totalNutrition
+        },
+        provider,
+        mealId: savedMeal ? savedMeal._id : null,
+        quantityResult: quantityParsed,
+        sourceBreakdown: nutritionResult.sourceBreakdown,
+        coverage: nutritionResult.coverage,
+        steps: { step1_tokens: quantityRaw.tokens }
+      };
+    } catch (error) {
+      console.error(`❌ [V4] Pipeline failed: ${error.message}`);
+      throw new Error(`Failed to analyze food (V4): ${error.message}`);
     }
   }
 
@@ -1430,6 +1613,91 @@ Return only valid JSON, no additional text.`;
       console.error('Failed to save meal data (V3):', error);
       throw new Error(`Failed to save meal data (V3): ${error.message}`);
     }
+  }
+
+  static async saveMealDataForV4(userId, imageUrl, nutritionResult, additionalData = {}, tokens = { input: null, output: null }) {
+    try {
+      const mealItems = nutritionResult.items.map((item, index) => {
+        const nut = item.nutrition || {};
+        return {
+          id: `item_${Date.now()}_${index}`,
+          name: { llm: item.name, final: null },
+          quantity: {
+            llm: {
+              value: item.quantity?.value || item.servingSize || 1,
+              unit: item.quantity?.unit || item.servingUnit || 'serving'
+            },
+            final: null
+          },
+          quantityAlternate: {
+            llm: {
+              value: item.grams || item.quantityAlternate?.value || null,
+              unit: 'grams'
+            },
+            final: { value: null, unit: null }
+          },
+          nutrition: {
+            calories: { llm: nut.calories || 0, final: nut.calories || 0 },
+            protein: { llm: nut.protein || 0, final: nut.protein || 0 },
+            carbs: { llm: nut.carbs || 0, final: nut.carbs || 0 },
+            fat: { llm: nut.fat || 0, final: nut.fat || 0 }
+          },
+          confidence: item.confidence || null,
+          nutritionSource: item.nutritionSource || 'llm_fresh',
+          foodItemId: item.foodItemId || null,
+          recipeId: item.recipeId || null,
+          dataSourcePriority: this.getDataSourcePriority(item.nutritionSource),
+          grams: item.grams || null
+        };
+      });
+
+      const photos = [];
+      if (imageUrl && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'))) {
+        photos.push({
+          url: imageUrl,
+          width: additionalData.width || null,
+          height: additionalData.height || null
+        });
+      }
+
+      const dateUtils = require('../utils/dateUtils');
+      const mealData = {
+        userId,
+        capturedAt: additionalData.capturedAt ? new Date(additionalData.capturedAt) : dateUtils.getCurrentDateInIST(),
+        photos,
+        llmVersion: '4.0',
+        llmModel: 'gemini-2.5-flash',
+        name: nutritionResult.mealName,
+        totalNutrition: {
+          calories: { llm: nutritionResult.totalNutrition.calories, final: nutritionResult.totalNutrition.calories },
+          protein: { llm: nutritionResult.totalNutrition.protein, final: nutritionResult.totalNutrition.protein },
+          carbs: { llm: nutritionResult.totalNutrition.carbs, final: nutritionResult.totalNutrition.carbs },
+          fat: { llm: nutritionResult.totalNutrition.fat, final: nutritionResult.totalNutrition.fat }
+        },
+        items: mealItems,
+        notes: additionalData.notes || `AI Analysis (V4 DB-first): ${nutritionResult.mealName}`,
+        userApproved: false,
+        inputTokens: tokens.input,
+        outputTokens: tokens.output
+      };
+
+      const meal = new Meal(mealData);
+      return await meal.save();
+    } catch (error) {
+      console.error('Failed to save meal data (V4):', error);
+      throw new Error(`Failed to save meal data (V4): ${error.message}`);
+    }
+  }
+
+  static getDataSourcePriority(source) {
+    const priorities = {
+      'usda': 1,
+      'ifct': 2,
+      'llm_cached': 3,
+      'llm_fresh': 4,
+      'recipe': 1
+    };
+    return priorities[source] || 99;
   }
 
   static parseAIResult(aiResult) {
