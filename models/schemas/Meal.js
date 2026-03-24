@@ -64,7 +64,25 @@ const itemSchema = new mongoose.Schema({
   quantityAlternate: itemQuantityAlternateSchema,
   nutrition: nutritionSchema,
   confidence: Number,
-  nutritionSource: { type: String, enum: ['db', 'llm_fallback'], default: null },
+  nutritionSource: {
+    type: String,
+    enum: ['usda', 'ifct', 'llm_cached', 'llm_fresh', 'recipe', 'db', 'llm_fallback'],
+    default: null
+  },
+  foodItemId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'FoodItem',
+    default: null
+  },
+  recipeId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Recipe',
+    default: null
+  },
+  dataSourcePriority: {
+    type: Number,
+    default: null
+  },
   grams: { type: Number, default: null },
   parentDish: { type: String, default: null },
   componentType: { type: String, default: null }, // 'protein' | 'gravy' when set
@@ -132,5 +150,7 @@ const mealSchema = new mongoose.Schema({
 // Indexes
 mealSchema.index({ userId: 1, capturedAt: -1 });
 mealSchema.index({ userId: 1, deletedAt: 1 });
+mealSchema.index({ 'items.nutritionSource': 1 });
+mealSchema.index({ 'items.foodItemId': 1 });
 
 module.exports = mongoose.model('Meal', mealSchema, 'meals'); 
