@@ -99,7 +99,7 @@ async function importIFCT() {
     console.log('=================================================\n');
 
     // Connect to MongoDB
-    const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/caltrack';
+    const mongoUri = process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://localhost:27017/caltrack';
     console.log(`Connecting to MongoDB: ${mongoUri.replace(/\/\/.*@/, '//<credentials>@')}`);
     await mongoose.connect(mongoUri);
     console.log('✓ Connected to MongoDB\n');
@@ -107,20 +107,29 @@ async function importIFCT() {
     // Try to load IFCT data from npm package
     let ifctData;
     try {
-      const ifct = require('@nodef/ifct2017');
+      const ifct = require('ifct2017');
+      const COMPOSITIONS = ifct.compositions;
       console.log('✓ Loaded IFCT 2017 npm package\n');
 
-      // The package exports a Map object with food codes as keys
-      // We need to convert it to an array
-      ifctData = Array.from(ifct.entries()).map(([code, food]) => ({
-        code,
-        ...food
+      // The package exports compositions as an array of objects
+      // Extract the fields we need
+      ifctData = COMPOSITIONS.map(food => ({
+        code: food.code,
+        name: food.name,
+        group: food.group,
+        // Energy is in kcal
+        energy: food.energy,
+        // Macros in grams
+        protein: food.protein,
+        fat: food.fat,
+        carbohydrates: food.carbohydrates,
+        fiber: food.fiber
       }));
 
       console.log(`Found ${ifctData.length} foods in IFCT database\n`);
     } catch (err) {
-      console.error('✗ Failed to load @nodef/ifct2017 npm package');
-      console.error('  Please install it first: npm install @nodef/ifct2017');
+      console.error('✗ Failed to load ifct2017 npm package');
+      console.error('  Please install it first: npm install ifct2017');
       console.error(`  Error: ${err.message}`);
       process.exit(1);
     }
@@ -133,26 +142,26 @@ async function importIFCT() {
     const foodItems = [];
 
     for (const food of ifctData) {
-      // IFCT structure: { code, name, group, energy, protein, fat, carbohydrates, fiber, ... }
-      const name = food.name || food.foodName;
+      // IFCT structure from ifct2017 package
+      const name = food.name;
       if (!name) continue;
 
       const aliases = getRegionalAliases(name);
-      const category = categorizeIFCTFood(food.group || food.foodGroup, name);
+      const category = categorizeIFCTFood(food.group, name);
 
       const foodItem = {
         name,
         aliases,
         category,
         dataSource: 'IFCT',
-        sourceId: food.code || food.foodCode,
+        sourceId: food.code,
         verified: true,
         // IFCT nutrition values (per 100g)
-        caloriesPer100g: parseFloat(food.energy || food.energyKcal) || 0,
+        caloriesPer100g: parseFloat(food.energy) || 0,
         proteinPer100g: parseFloat(food.protein) || 0,
-        carbsPer100g: parseFloat(food.carbohydrates || food.carbs) || 0,
-        fatPer100g: parseFloat(food.fat || food.totalFat) || 0,
-        fiberPer100g: parseFloat(food.fiber || food.dietaryFiber) || 0,
+        carbsPer100g: parseFloat(food.carbohydrates) || 0,
+        fatPer100g: parseFloat(food.fat) || 0,
+        fiberPer100g: parseFloat(food.fiber) || 0,
         usageCount: 0,
         llmModel: null,
         llmGeneratedAt: null
