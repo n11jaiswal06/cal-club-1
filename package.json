@@ -13,7 +13,10 @@
   "description": "",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "ifct2017": "^2.0.15",
     "@sentry/node": "^10.38.0",
+    "adm-zip": "^0.5.10",
+    "csv-parse": "^5.5.3",
     "dotenv": "^17.2.1",
     "express-validator": "^7.2.1",
     "firebase-admin": "^13.6.0",

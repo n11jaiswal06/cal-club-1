@@ -1,31 +1,81 @@
 const mongoose = require('mongoose');
 
 const foodItemSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  type: { type: String, enum: ['PROTEIN', 'GRAVY', 'STANDALONE'], required: true },
-  aliases: [String],
-  category: String,
+  name: {
+    type: String,
+    required: true,
+    index: true
+  },
+  aliases: {
+    type: [String],
+    default: [],
+    index: true
+  },
+  category: {
+    type: String,
+    enum: ['protein', 'grain', 'fat', 'vegetable', 'fruit', 'sauce', 'beverage', 'dairy', 'nuts', 'legumes', 'other'],
+    required: true
+  },
+  dataSource: {
+    type: String,
+    enum: ['USDA', 'IFCT', 'LLM', 'MANUAL'],
+    required: true,
+    index: true
+  },
+  sourceId: {
+    type: String,
+    index: true
+  },
+  verified: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  // Nutrition per 100g (unified storage for all food types)
+  caloriesPer100g: {
+    type: Number,
+    required: true
+  },
+  proteinPer100g: {
+    type: Number,
+    required: true
+  },
+  carbsPer100g: {
+    type: Number,
+    required: true
+  },
+  fatPer100g: {
+    type: Number,
+    required: true
+  },
+  fiberPer100g: {
+    type: Number,
+    default: 0
+  },
+  // Tracking and metadata
+  usageCount: {
+    type: Number,
+    default: 0
+  },
+  llmModel: {
+    type: String,
+    default: null
+  },
+  llmGeneratedAt: {
+    type: Date,
+    default: null
+  }
+}, {
+  timestamps: true
+});
 
-  // PROTEIN-specific (per-piece values, null for GRAVY/STANDALONE)
-  form: String,
-  caloriesPerPiece: Number,
-  proteinPerPiece: Number,
-  carbsPerPiece: Number,
-  fatPerPiece: Number,
-  gramsPerPiece: Number,
+// Text index for fuzzy searching
+foodItemSchema.index({ name: 'text', aliases: 'text' });
 
-  // GRAVY and STANDALONE (per-100g values, null for PROTEIN)
-  caloriesPer100g: Number,
-  proteinPer100g: Number,
-  carbsPer100g: Number,
-  fatPer100g: Number,
+// Compound index for filtering verified entries by data source
+foodItemSchema.index({ dataSource: 1, verified: 1 });
 
-  verified: { type: Boolean, default: false },
-  source: String
-}, { timestamps: true });
-
-foodItemSchema.index({ name: 1, type: 1 });
-foodItemSchema.index({ aliases: 1 });
-foodItemSchema.index({ name: 1, form: 1 }, { sparse: true }); // for PROTEIN lookups by name+form
+// Index for finding popular items
+foodItemSchema.index({ usageCount: -1 });
 
 module.exports = mongoose.model('FoodItem', foodItemSchema, 'food_items');

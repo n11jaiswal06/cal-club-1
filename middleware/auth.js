@@ -24,6 +24,11 @@ function jwtMiddleware(req, res, next) {
       if (req.url.startsWith('/goals/') && !req.url.includes('/calculate-and-save')) {
     return next();
   }
+
+  // Allow admin routes (admin has its own auth via x-admin-email/x-admin-password headers)
+  if (req.url.startsWith('/admin')) {
+    return next();
+  }
   const authHeader = req.headers['authorization'];
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     res.writeHead(401, { 'Content-Type': 'application/json' });
