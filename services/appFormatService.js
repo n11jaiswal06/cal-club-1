@@ -1103,32 +1103,6 @@ class AppFormatService {
       subtitle: 'Connect to track calories burned'
     });
 
-    // Logout (with divider before it)
-    menuItems.push({
-      id: 'logout',
-      icon: 'logout',
-      title: 'Logout',
-      action: 'logout',
-      url: null,
-      type: 'action',
-      color: 'red',
-      showDivider: true,
-      subtitle: null
-    });
-
-    // Delete Account
-    menuItems.push({
-      id: 'delete_account',
-      icon: 'delete_forever',
-      title: 'Delete Account',
-      action: 'delete_account',
-      url: null,
-      type: 'action',
-      color: 'red',
-      showDivider: false,
-      subtitle: null
-    });
-
     return menuItems;
   }
 
