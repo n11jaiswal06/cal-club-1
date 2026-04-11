@@ -967,7 +967,6 @@ class AppFormatService {
 
       // Build header data
       const header = {
-        name: user.name || null,
         phoneNumber: user.phone || null,
         avatarUrl: null, // Not stored in User schema currently
         email: user.email || null
