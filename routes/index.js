@@ -10,7 +10,6 @@ const webhookRoutes = require('./webhookRoutes');
 const goalRoutes = require('./goalRoutes');
 const userLogRoutes = require('./userLogRoutes');
 const notificationRoutes = require('./notificationRoutes');
-const recommendationRoutes = require('./recommendationRoutes');
 const { requireAccess } = require('../middleware/membership');
 const activityStoreRoutes = require('./activityStoreRoutes');
 
@@ -80,11 +79,6 @@ function setupRoutes(req, res) {
   // User log routes
   if (url.startsWith('/user-logs')) {
     return requireAccess(req, res, () => userLogRoutes(req, res));
-  }
-
-  // Recommendation routes
-  if (url.startsWith('/recommendations')) {
-    return requireAccess(req, res, () => recommendationRoutes(req, res));
   }
 
   // Activity store (sync / fetch)

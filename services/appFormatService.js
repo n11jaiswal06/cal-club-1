@@ -1,5 +1,4 @@
 const MealService = require('./mealService');
-const RecommendationService = require('./recommendationService');
 const HeroBriefService = require('./heroBriefService');
 const { findUserById } = require('../models/user');
 const User = require('../models/schemas/User');
@@ -473,38 +472,6 @@ class AppFormatService {
         }
       }
     };
-  }
-
-  /**
-   * Format recommendation widget for app calendar
-   * Only enabled for env-based test users (TEST_USER_IDS).
-   * @param {ObjectId} userId - User ID
-   * @returns {Promise<Object|null>} - Recommendation widget or null
-   */
-  static async formatRecommendationWidget(userId) {
-    try {
-      const { isTestUser } = require('../config/testUsers');
-      if (!isTestUser(userId)) {
-        return null;
-      }
-      const recommendationData = await RecommendationService.getActiveRecommendation(userId);
-      
-      if (!recommendationData) {
-        return null;
-      }
-
-      // Expected frontend format (app calendar / recommendation widget)
-      return {
-        widgetType: "recommendation_widget",
-        widgetData: {
-          heading: recommendationData.heading,
-          description: recommendationData.description
-        }
-      };
-    } catch (error) {
-      console.error('Error formatting recommendation widget:', error);
-      return null; // Don't break the app if recommendation fails
-    }
   }
 
   /**

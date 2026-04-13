@@ -1,7 +1,6 @@
 const cron = require('node-cron');
 const { getActivePreferencesByTime } = require('../models/notificationPreference');
 const NotificationService = require('./notificationService');
-const RecommendationService = require('./recommendationService');
 const { reportError } = require('../utils/sentryReporter');
 
 // Meal reminder messages
@@ -101,23 +100,7 @@ function initializeMealReminderCron() {
 
   console.log('✅ [CRON] Meal reminder cron job initialized');
 
-  // Run every 15 minutes for recommendation processing
-  const recommendationJob = cron.schedule('*/15 * * * *', async () => {
-    console.log('🔔 [CRON] Running recommendation cron job...');
-    try {
-      await RecommendationService.processRecommendations();
-    } catch (error) {
-      reportError(error, { extra: { context: 'recommendationCronJob' } });
-      console.error('❌ [CRON] Error in recommendation cron job:', error);
-    }
-  }, {
-    scheduled: true,
-    timezone: 'Asia/Kolkata'
-  });
-
-  console.log('✅ [CRON] Recommendation cron job initialized (every 15 mins)');
-  
-  return { mealReminderJob, recommendationJob };
+  return { mealReminderJob };
 }
 
 /**
