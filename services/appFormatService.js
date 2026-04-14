@@ -454,6 +454,7 @@ class AppFormatService {
       dish_image: meal.photos?.[0]?.url || "",
       dish_name: meal.name || "Unknown Meal",
       time: this.formatTime(meal.capturedAt),
+      window: this.computeMealWindow(meal.capturedAt),
       calories: parseFloat((meal.totalNutrition?.calories?.final || meal.totalNutrition?.calories?.llm || 0).toFixed(2)),
       protein: parseFloat((meal.totalNutrition?.protein?.final || meal.totalNutrition?.protein?.llm || 0).toFixed(2)),
       carbs: parseFloat((meal.totalNutrition?.carbs?.final || meal.totalNutrition?.carbs?.llm || 0).toFixed(2)),
@@ -568,6 +569,24 @@ class AppFormatService {
     const dayPeriod = parts.find(p => p.type === 'dayPeriod')?.value || '';
     
     return `${hour}:${minute}${dayPeriod}`;
+  }
+
+  static computeMealWindow(date) {
+    const d = new Date(date);
+    const istFormatter = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    });
+    const parts = istFormatter.formatToParts(d);
+    const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
+    const minute = parseInt(parts.find(p => p.type === 'minute').value, 10);
+
+    if (hour >= 5 && hour < 12) return 'Breakfast';
+    if (hour >= 12 && hour < 16) return 'Lunch';
+    if (hour >= 16 && (hour < 19 || (hour === 19 && minute < 30))) return 'Snack';
+    return 'Dinner';
   }
 
   static isSameDay(date1, date2) {
