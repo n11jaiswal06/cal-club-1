@@ -571,13 +571,16 @@ class AppFormatService {
     return `${hour}:${minute}${dayPeriod}`;
   }
 
+  // Contract: returned strings MUST match the client's allow-list in
+  // lib/models/widgets/log_entry_data.dart (_validWindows). Drift silently
+  // hides meals on the home page.
   static computeMealWindow(date) {
     const d = new Date(date);
     const istFormatter = new Intl.DateTimeFormat('en-GB', {
       timeZone: 'Asia/Kolkata',
       hour: '2-digit',
       minute: '2-digit',
-      hour12: false
+      hourCycle: 'h23'
     });
     const parts = istFormatter.formatToParts(d);
     const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
@@ -585,6 +588,7 @@ class AppFormatService {
 
     if (hour >= 5 && hour < 12) return 'Breakfast';
     if (hour >= 12 && hour < 16) return 'Lunch';
+    // Snack ends 19:30 IST per meal-planner spec.
     if (hour >= 16 && (hour < 19 || (hour === 19 && minute < 30))) return 'Snack';
     return 'Dinner';
   }
