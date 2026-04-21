@@ -121,6 +121,108 @@ class OnboardingController {
       }));
     }
   }
+  // ==================== V2 ENDPOINTS ====================
+
+  static async getV2Screens(req, res) {
+    try {
+      const config = OnboardingService.getV2Config();
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        data: config
+      }));
+    } catch (error) {
+      reportError(error, { req });
+      console.error('Error fetching V2 screens:', error);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: false,
+        message: 'Failed to fetch V2 screen config',
+        error: error.message
+      }));
+    }
+  }
+
+  static async submitV2Answers(req, res) {
+    parseBody(req, async (err, data) => {
+      if (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request body' }));
+        return;
+      }
+
+      const userId = req.user?.userId;
+      if (!userId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: false,
+          message: 'User ID not found in token'
+        }));
+        return;
+      }
+
+      const { answers } = data;
+      if (!answers || typeof answers !== 'object') {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: false,
+          message: 'Answers object is required'
+        }));
+        return;
+      }
+
+      try {
+        const result = await OnboardingService.saveV2Answers(userId, answers);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          message: result.message
+        }));
+      } catch (error) {
+        reportError(error, { req });
+        console.error('Error submitting V2 answers:', error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: false,
+          message: 'Failed to submit V2 answers',
+          error: error.message
+        }));
+      }
+    });
+  }
+
+  static async getV2Status(req, res) {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: false,
+          message: 'User ID not found in token'
+        }));
+        return;
+      }
+
+      const status = await OnboardingService.getOnboardingStatus(userId);
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        data: status
+      }));
+    } catch (error) {
+      reportError(error, { req });
+      console.error('Error fetching V2 status:', error);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: false,
+        message: 'Failed to fetch onboarding status',
+        error: error.message
+      }));
+    }
+  }
 }
 
 module.exports = OnboardingController;

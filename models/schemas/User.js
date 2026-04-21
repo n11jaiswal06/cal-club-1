@@ -71,6 +71,14 @@ const userSchema = new mongoose.Schema({
       default: 65
     }
   },
+  onboardingCompleted: {
+    type: Boolean,
+    default: false
+  },
+  onboardingCompletedAt: {
+    type: Date,
+    default: null
+  },
   isActive: {
     type: Boolean,
     default: true

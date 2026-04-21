@@ -9,8 +9,8 @@ function jwtMiddleware(req, res, next) {
     return next();
   }
   
-  // Allow public access to onboarding questions
-  if (req.url === '/onboarding/questions' && req.method === 'GET') {
+  // Allow public access to onboarding questions and V2 screen config
+  if ((req.url === '/onboarding/questions' || req.url === '/onboarding/v2/screens') && req.method === 'GET') {
     return next();
   }
   

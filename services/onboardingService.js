@@ -436,6 +436,927 @@ class OnboardingService {
       throw new Error(`Failed to delete user answers: ${error.message}`);
     }
   }
+
+  // ==================== V2 ENDPOINTS ====================
+
+  /**
+   * Returns the full V2 onboarding screen configuration.
+   * All screen definitions, options, headers, and metadata.
+   */
+  static getV2Config() {
+    return {
+      version: '2.0',
+      sections: [
+        {
+          id: 'your_profile',
+          label: 'YOUR PROFILE',
+          screens: [
+            {
+              id: 'screen_1',
+              type: 'splash',
+              header: null,
+              subtext: null,
+              ctaText: 'Get Started',
+              showProgressBar: false,
+              showBackButton: false,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_30',
+              type: 'singleSelect',
+              header: 'How did you hear about Cal Club?',
+              subtext: null,
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'attribution_source',
+              footnote: null,
+              options: [
+                { label: 'Instagram', value: 'instagram' },
+                { label: 'YouTube', value: 'youtube' },
+                { label: 'A friend or family member', value: 'friend_family' },
+                { label: 'My gym / trainer', value: 'gym_trainer' },
+                { label: 'An influencer I follow', value: 'influencer' },
+                { label: 'App Store', value: 'app_store' },
+                { label: 'Other', value: 'other' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_2',
+              type: 'textInput',
+              header: 'Before we begin, what should we call you?',
+              subtext: null,
+              ctaText: 'Continue',
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: 'user_name',
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_3',
+              type: 'infoTransition',
+              header: "Let's personalize your Cal Club plan, {name}!",
+              subtext: "We'll ask a few quick questions to build something that actually works for you.",
+              ctaText: "Let's do it",
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_4',
+              type: 'singleSelect',
+              header: "What's your main goal?",
+              subtext: null,
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'primary_goal',
+              footnote: null,
+              options: [
+                { label: 'Lose fat', value: 'lose_fat' },
+                { label: 'Build muscle', value: 'build_muscle' },
+                { label: 'Lose fat & build muscle', value: 'recomp' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_5',
+              type: 'singleSelect',
+              header: "What's your gender?",
+              subtext: 'This helps us calculate accurate targets for you.',
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'gender',
+              footnote: null,
+              options: [
+                { label: 'Male', value: 'male' },
+                { label: 'Female', value: 'female' },
+                { label: 'Other', value: 'other' },
+                { label: 'Prefer not to say', value: 'prefer_not_to_say' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_6',
+              type: 'datePicker',
+              header: 'When were you born?',
+              subtext: 'Your age affects your metabolic rate, this helps us set the right targets.',
+              ctaText: 'Continue',
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: 'date_of_birth',
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_7',
+              type: 'dualNumberInput',
+              header: "What's your height and weight?",
+              subtext: "We'll use this to calculate your BMI and daily calorie needs.",
+              ctaText: 'Continue',
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: 'height_weight',
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_8',
+              type: 'profileSummary',
+              header: "Here's your profile, {name}",
+              subtext: null,
+              ctaText: 'Looks good!',
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_9',
+              type: 'singleSelect',
+              header: 'How would you describe your lifestyle?',
+              subtext: 'Your daily routines can affect your results.',
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'lifestyle',
+              footnote: null,
+              options: [
+                { label: 'Student', value: 'student' },
+                { label: 'Employed part-time', value: 'employed_part_time' },
+                { label: 'Employed full-time', value: 'employed_full_time' },
+                { label: 'Not employed', value: 'not_employed' },
+                { label: 'Retired', value: 'retired' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'vr_1',
+              type: 'valueReinforcement',
+              header: '87% of Cal Club users report better progress toward their fitness goals when they track consistently.',
+              subtext: null,
+              ctaText: 'Continue',
+              showProgressBar: false,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: { socialProofNumber: '87%' }
+            }
+          ]
+        },
+        {
+          id: 'your_goals',
+          label: 'YOUR GOALS',
+          screens: [
+            {
+              id: 'screen_10',
+              type: 'numberInput',
+              header: 'What is your ideal weight that you want to reach?',
+              subtext: "Great! We're excited to help you reach your goals.",
+              ctaText: 'Next',
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: 'target_weight',
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_12',
+              type: 'singleSelect',
+              header: 'How fast would you like to see results?',
+              subtext: "Based on your goal, here's what's realistic and sustainable.",
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'pace_preference',
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: { optionsResolvedByGoal: true }
+            },
+            {
+              id: 'vr_2',
+              type: 'valueReinforcement',
+              header: 'Sticking to a plan can be hard. Cal Club makes it easy.',
+              subtext: null,
+              ctaText: 'Got it!',
+              showProgressBar: false,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_13',
+              type: 'displayAnimation',
+              header: null,
+              subtext: null,
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_14',
+              type: 'infoTransition',
+              header: null,
+              subtext: null,
+              ctaText: 'Continue',
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_15',
+              type: 'toggleList',
+              header: "When do you usually eat? We'll remind you to log.",
+              subtext: 'You can always change these later.',
+              ctaText: 'Continue',
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: 'meal_reminders',
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_16',
+              type: 'systemPermission',
+              header: null,
+              subtext: null,
+              ctaText: null,
+              showProgressBar: false,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: 'notifications_enabled',
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: {}
+            }
+          ]
+        },
+        {
+          id: 'your_journey',
+          label: 'YOUR JOURNEY',
+          screens: [
+            {
+              id: 'screen_29',
+              type: 'singleSelect',
+              header: 'Do you have a gym membership?',
+              subtext: null,
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'gym_membership',
+              footnote: null,
+              options: [
+                { label: 'Yes', value: 'yes' },
+                { label: 'No, I work out at home or outdoors', value: 'home_outdoor' },
+                { label: 'Not right now', value: 'not_now' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_17',
+              type: 'singleSelect',
+              header: 'How long have you been working out?',
+              subtext: 'Any kind of training counts, gym, home workouts, running, sports, anything.',
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'workout_duration',
+              footnote: null,
+              options: [
+                { label: 'Less than a month', value: 'less_than_month' },
+                { label: '1\u20133 months', value: '1_3_months' },
+                { label: '3\u20136 months', value: '3_6_months' },
+                { label: '6 months \u2013 1 year', value: '6_months_1_year' },
+                { label: 'Over a year', value: 'over_a_year' },
+                { label: 'On and off for a while', value: 'on_and_off' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_18',
+              type: 'singleSelect',
+              header: "How do you feel about the results you've seen so far?",
+              subtext: "Be honest, there's no wrong answer here.",
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'frustration_level',
+              footnote: null,
+              options: [
+                { label: "I'm making good progress but want to optimize", value: 'good_progress' },
+                { label: 'Honestly, I expected more by now', value: 'expected_more' },
+                { label: "I'm frustrated, I'm putting in the work but not seeing it", value: 'frustrated' },
+                { label: "I'm not sure what results to even expect", value: 'unsure' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_19',
+              type: 'singleSelect',
+              header: 'When it comes to nutrition for your fitness goals, where are you?',
+              subtext: null,
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'nutrition_awareness',
+              footnote: null,
+              options: [
+                { label: "I know what to do, I just can't stay consistent", value: 'know_but_inconsistent' },
+                { label: "I have a rough idea but I'm not sure it's right", value: 'rough_idea' },
+                { label: "Honestly, I'm pretty lost", value: 'pretty_lost' },
+                { label: "I've tried tracking before but it didn't stick", value: 'tried_didnt_stick' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_20',
+              type: 'singleSelect',
+              header: 'Have you tried tracking your food before?',
+              subtext: 'Apps, pen and paper, mental tracking, all counts.',
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'tried_tracking',
+              footnote: null,
+              options: [
+                { label: 'Yes', value: 'yes' },
+                { label: 'No', value: 'no' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_21',
+              type: 'singleSelect',
+              header: 'What made you stop?',
+              subtext: null,
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'tracking_failure_reason',
+              footnote: null,
+              options: [
+                { label: 'It was too tedious and time-consuming', value: 'too_tedious' },
+                { label: "I didn't see the point after a while", value: 'no_point' },
+                { label: "I got obsessive about numbers and it wasn't healthy", value: 'obsessive' },
+                { label: 'I never really started properly', value: 'never_started' }
+              ],
+              skipCondition: {
+                field: 'tried_tracking',
+                operator: 'not_equals',
+                value: 'yes',
+                skipToScreenId: 'vr_3'
+              },
+              metadata: {}
+            },
+            {
+              id: 'vr_3',
+              type: 'valueReinforcement',
+              header: 'WHY CAL CLUB IS DIFFERENT',
+              subtext: 'Cal Club creates long-term results through building habits, not crash diets or obsessive tracking.',
+              ctaText: 'Continue',
+              showProgressBar: false,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_22',
+              type: 'singleSelect',
+              header: 'Which of these sounds most like you?',
+              subtext: null,
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'fitness_identity',
+              footnote: null,
+              options: [
+                { label: "I'm new to fitness and still figuring things out", value: 'new_to_fitness' },
+                { label: "I've been at it a while but nutrition has always been my weak spot", value: 'nutrition_weak_spot' },
+                { label: "I take my training seriously and I'm ready to dial in the nutrition side", value: 'serious_trainer' },
+                { label: "I've been on and off for years and I want this time to be different", value: 'on_off_different' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_23',
+              type: 'singleSelect',
+              header: "After a day where your eating doesn't go as planned, what usually happens?",
+              subtext: null,
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'food_relationship',
+              footnote: null,
+              options: [
+                { label: 'I try to eat less the next day to compensate', value: 'compensate' },
+                { label: 'I feel guilty but move on', value: 'guilty_move_on' },
+                { label: 'I tend to think "screw it" and eat whatever for a few days', value: 'screw_it' },
+                { label: "I don't really think about it much", value: 'dont_think' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_24',
+              type: 'multiSelect',
+              header: 'What makes sticking to your nutrition hardest?',
+              subtext: 'Pick all that apply.',
+              ctaText: 'Continue',
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: 'nutrition_obstacles',
+              footnote: null,
+              options: [
+                { label: "I eat most meals with family and can't control what's cooked", value: 'family_meals' },
+                { label: "I'm busy and end up eating whatever's convenient", value: 'busy_convenience' },
+                { label: 'Social situations, dinners, parties, weekends', value: 'social_situations' },
+                { label: 'I just don\'t enjoy the food I think I\'m "supposed to" eat', value: 'dont_enjoy' },
+                { label: 'I struggle to eat enough to hit my targets', value: 'struggle_enough' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_25',
+              type: 'singleSelect',
+              header: 'Do you follow a specific diet?',
+              subtext: 'This helps us tailor suggestions.',
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'diet_preference',
+              footnote: null,
+              options: [
+                { label: 'Vegetarian', value: 'vegetarian' },
+                { label: 'Vegan', value: 'vegan' },
+                { label: 'Eggetarian', value: 'eggetarian' },
+                { label: 'Non-vegetarian', value: 'non_vegetarian' },
+                { label: 'No specific preference', value: 'no_preference' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_26',
+              type: 'singleSelect',
+              header: "Let's better understand your current state of mind.",
+              subtext: 'At this moment, how motivated are you to dial in your nutrition?',
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'motivation_readiness',
+              footnote: null,
+              options: [
+                { label: "I'm ready", value: 'ready' },
+                { label: 'Feeling hopeful', value: 'hopeful' },
+                { label: "I'm cautious", value: 'cautious' },
+                { label: 'Taking it easy', value: 'taking_it_easy' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'vr_4',
+              type: 'valueReinforcement',
+              header: 'WHAT OUR USERS SAY',
+              subtext: null,
+              ctaText: 'Got it!',
+              showProgressBar: false,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: {
+                testimonialQuote: '[Placeholder quote about how the user pushed through a plateau and finally saw the results of their training thanks to dialed-in nutrition]',
+                testimonialAttribution: '\u2013 Sarah, Runner'
+              }
+            }
+          ]
+        },
+        {
+          id: 'your_plan',
+          label: 'YOUR PLAN',
+          screens: [
+            {
+              id: 'screen_27',
+              type: 'singleSelect',
+              header: 'If your nutrition was fully dialed in and you were seeing results, what would that change for you?',
+              subtext: null,
+              ctaText: null,
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: true,
+              dataKey: 'motivation_anchor',
+              footnote: null,
+              options: [
+                { label: "I'd finally see my training translate to how I look", value: 'training_results' },
+                { label: "I'd feel confident and in control of my body", value: 'confidence' },
+                { label: "I'd stop second-guessing every meal", value: 'stop_guessing' },
+                { label: "I'd feel like my effort is actually paying off", value: 'effort_paying_off' },
+                { label: "I'd perform better in my workouts", value: 'better_performance' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_28',
+              type: 'multiSelect',
+              header: 'What would you like to accomplish with Cal Club?',
+              subtext: 'Pick all that apply.',
+              ctaText: 'Continue',
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: 'accomplishment_intent',
+              footnote: null,
+              options: [
+                { label: 'Understand what I should be eating', value: 'understand_eating' },
+                { label: 'Build consistent nutrition habits', value: 'build_habits' },
+                { label: 'Track my food without it feeling like a chore', value: 'track_without_chore' },
+                { label: 'Get a plan that works with my training', value: 'plan_works_with_training' },
+                { label: 'Stay accountable', value: 'stay_accountable' }
+              ],
+              skipCondition: null,
+              metadata: {}
+            },
+            {
+              id: 'screen_31',
+              type: 'infoTransition',
+              header: null,
+              subtext: null,
+              ctaText: 'Build my plan',
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: { screenVariant: 'thank_you' }
+            },
+            {
+              id: 'screen_32',
+              type: 'infoTransition',
+              header: null,
+              subtext: null,
+              ctaText: 'Continue',
+              showProgressBar: true,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: { screenVariant: 'app_store_rating' }
+            },
+            {
+              id: 'screen_33',
+              type: 'valueReinforcement',
+              header: "Based on everything you've shared, here's how we're going to approach this together.",
+              subtext: null,
+              ctaText: 'Show me my plan',
+              showProgressBar: false,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: { screenVariant: 'convergence' }
+            },
+            {
+              id: 'screen_34',
+              type: 'infoTransition',
+              header: null,
+              subtext: null,
+              ctaText: 'Next',
+              showProgressBar: false,
+              showBackButton: false,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: { screenVariant: 'your_plan' }
+            },
+            {
+              id: 'screen_35',
+              type: 'infoTransition',
+              header: null,
+              subtext: null,
+              ctaText: 'Try for $0.00',
+              showProgressBar: false,
+              showBackButton: false,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: { screenVariant: 'paywall_intro' }
+            },
+            {
+              id: 'screen_36',
+              type: 'infoTransition',
+              header: null,
+              subtext: null,
+              ctaText: 'Continue for FREE',
+              showProgressBar: false,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: { screenVariant: 'paywall_reminder' }
+            },
+            {
+              id: 'screen_37',
+              type: 'infoTransition',
+              header: null,
+              subtext: null,
+              ctaText: 'Start My 3-Day Free Trial',
+              showProgressBar: false,
+              showBackButton: true,
+              autoAdvance: false,
+              dataKey: null,
+              footnote: null,
+              options: null,
+              skipCondition: null,
+              metadata: { screenVariant: 'paywall_plan', trialDays: 3 }
+            }
+          ]
+        }
+      ],
+      textMappings: {
+        workout_duration: {
+          less_than_month: 'less than a month',
+          '1_3_months': '1\u20133 months',
+          '3_6_months': '3\u20136 months',
+          '6_months_1_year': '6 months \u2013 1 year',
+          over_a_year: 'over a year',
+          on_and_off: 'on and off for a while'
+        },
+        nutrition_awareness: {
+          know_but_inconsistent: 'you know what to do but struggle with consistency',
+          rough_idea: "you have a rough idea but aren't sure it's right",
+          pretty_lost: "you're still figuring out the nutrition side",
+          tried_didnt_stick: "you've tried tracking before but it didn't stick"
+        },
+        tried_tracking: {
+          yes: "you've tracked before",
+          no: "you haven't tracked before"
+        },
+        motivation_anchor: {
+          training_results: 'see your training translate to how you look',
+          confidence: 'feel confident and in control of your body',
+          stop_guessing: 'stop second-guessing every meal',
+          effort_paying_off: 'feel like your effort is actually paying off',
+          better_performance: 'perform better in your workouts'
+        }
+      },
+      validationRules: {
+        user_name: { minLength: 2 },
+        height_cm: { min: 50, max: 300 },
+        weight_kg: { min: 20, max: 500 },
+        target_weight: { min: 30, max: 300 }
+      },
+      planHighlights: [
+        'Focusing on healthy weight loss',
+        'Paced to reach your goal and maintain weight loss',
+        'AI Nutrition Coach'
+      ]
+    };
+  }
+
+  /**
+   * Save V2 onboarding answers and trigger side effects.
+   * Reuses existing utility methods for weight logging, name update, etc.
+   * @param {string} userId - User ID
+   * @param {Object} answers - Flat named-field answers object
+   */
+  static async saveV2Answers(userId, answers) {
+    try {
+      const User = require('../models/schemas/User');
+      const userIdObjectId = typeof userId === 'string'
+        ? new mongoose.Types.ObjectId(userId)
+        : userId;
+
+      // Store raw answers in onboarding_v2_answers collection
+      const OnboardingV2Answer = this._getV2AnswerModel();
+
+      // Soft delete previous answers
+      await OnboardingV2Answer.updateMany(
+        { userId: userIdObjectId, deletedAt: null },
+        { deletedAt: new Date() }
+      );
+
+      // Save new answers
+      await OnboardingV2Answer.create({
+        userId: userIdObjectId,
+        answers: answers,
+      });
+
+      // --- Side effects (fire-and-forget, reusing existing methods) ---
+
+      // Update user name
+      if (answers.userName) {
+        this.updateUserName(userId, answers.userName).catch(err => {
+          console.error('V2: Background user name update failed:', err);
+        });
+      }
+
+      // Update target goal
+      if (answers.primaryGoal) {
+        this.updateUserTargetGoal(userId, answers.primaryGoal).catch(err => {
+          console.error('V2: Background target goal update failed:', err);
+        });
+      }
+
+      // Update target weight
+      if (answers.targetWeight != null) {
+        this.updateUserTargetWeight(userId, answers.targetWeight).catch(err => {
+          console.error('V2: Background target weight update failed:', err);
+        });
+      }
+
+      // Auto-log current weight
+      if (answers.weightKg != null) {
+        const weightAnswer = `weight_${answers.weightKg}`;
+        this.autoLogWeight(userId, weightAnswer).catch(err => {
+          console.error('V2: Background weight logging failed:', err);
+        });
+      }
+
+      // Create meal notification preferences
+      if (answers.mealReminders && Array.isArray(answers.mealReminders)) {
+        const reminderString = answers.mealReminders
+          .map(r => `${r.label}:${r.time}:${r.enabled}`)
+          .join(',');
+        createNotificationPreferencesFromString(userId, reminderString)
+          .then(prefs => {
+            console.log(`\u2705 V2: Created ${prefs.length} meal notification preferences`);
+          })
+          .catch(err => {
+            console.error('V2: Background notification preference creation failed:', err);
+          });
+      }
+
+      // Mark onboarding as completed on the user document
+      await User.findByIdAndUpdate(
+        userIdObjectId,
+        {
+          onboardingCompleted: true,
+          onboardingCompletedAt: new Date()
+        },
+        { new: true }
+      );
+
+      console.log(`\u2705 V2 onboarding completed for user ${userId}`);
+
+      return {
+        success: true,
+        message: 'Onboarding answers saved successfully'
+      };
+    } catch (error) {
+      throw new Error(`Failed to save V2 answers: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get onboarding completion status for a user.
+   * @param {string} userId - User ID
+   * @returns {{ completed: boolean }}
+   */
+  static async getOnboardingStatus(userId) {
+    try {
+      const User = require('../models/schemas/User');
+      const userIdObjectId = typeof userId === 'string'
+        ? new mongoose.Types.ObjectId(userId)
+        : userId;
+
+      const user = await User.findById(userIdObjectId).select('onboardingCompleted').lean();
+      return {
+        completed: user?.onboardingCompleted === true
+      };
+    } catch (error) {
+      throw new Error(`Failed to get onboarding status: ${error.message}`);
+    }
+  }
+
+  /**
+   * Lazily create/get the V2 answers Mongoose model.
+   * Uses a separate collection: onboarding_v2_answers
+   */
+  static _getV2AnswerModel() {
+    if (mongoose.models.OnboardingV2Answer) {
+      return mongoose.models.OnboardingV2Answer;
+    }
+
+    const schema = new mongoose.Schema({
+      userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true,
+        index: true
+      },
+      answers: {
+        type: mongoose.Schema.Types.Mixed,
+        required: true
+      },
+      deletedAt: {
+        type: Date,
+        default: null
+      }
+    }, { timestamps: true });
+
+    schema.index({ userId: 1, deletedAt: 1 });
+
+    return mongoose.model('OnboardingV2Answer', schema, 'onboarding_v2_answers');
+  }
 }
 
 module.exports = OnboardingService;
