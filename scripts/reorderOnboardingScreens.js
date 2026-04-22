@@ -138,8 +138,30 @@ async function main() {
 
   console.log('─── Applying changes ──────────────────────────');
 
+  // The `sequence` unique index is NOT scoped to active docs. Inactive
+  // legacy questions holding sequences in our target range (1..N) would
+  // collide with pass 2. Park them at 9000+ before we start. They stay
+  // inactive — the onboarding fetch excludes them — this just moves
+  // their numerical slot out of the way.
+  const targetMax = reordered.length;
+  const collidingInactive = await Question.find({
+    isActive: false,
+    sequence: { $gte: 1, $lte: targetMax },
+  })
+    .sort({ sequence: 1 })
+    .lean();
+  if (collidingInactive.length > 0) {
+    console.log(`  ℹ Parking ${collidingInactive.length} inactive docs at 9000+ to avoid unique-index collisions`);
+    for (const doc of collidingInactive) {
+      await Question.updateOne(
+        { _id: doc._id },
+        { $set: { sequence: 9000 + doc.sequence } }
+      );
+    }
+  }
+
   // Two-pass write to respect the unique index on `sequence`:
-  //   1) bump every doc into a safe temp range
+  //   1) bump every active doc into a safe temp range
   //   2) assign the final sequences
   const tempOps = reordered.map((q) => ({
     updateOne: {
@@ -150,13 +172,16 @@ async function main() {
   await Question.bulkWrite(tempOps, { ordered: false });
   console.log('  ✓ Pass 1: moved docs to temp sequence range');
 
-  const finalOps = reordered.map((q, idx) => ({
-    updateOne: {
-      filter: { _id: q._id },
-      update: { $set: { sequence: idx + 1 } },
-    },
-  }));
-  await Question.bulkWrite(finalOps, { ordered: false });
+  // Pass 2 runs sequentially — ordered writes so the unique-index check
+  // sees a consistent intermediate state rather than racing with parallel
+  // writes in `ordered: false` mode.
+  for (let idx = 0; idx < reordered.length; idx++) {
+    const q = reordered[idx];
+    await Question.updateOne(
+      { _id: q._id },
+      { $set: { sequence: idx + 1 } }
+    );
+  }
   console.log('  ✓ Pass 2: assigned final sequences\n');
 
   const verified = await Question.find({ isActive: true })
