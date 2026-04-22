@@ -28,6 +28,22 @@ async function deactivateUserByPhone(phone) {
   );
 }
 
+/**
+ * Deactivate a user and free the OAuth identity fields so a fresh sign-in
+ * with the same Google / Apple / Firebase identity creates a new record
+ * instead of colliding on the `firebaseUid` sparse-unique index.
+ */
+async function deactivateUserById(userId) {
+  return User.findOneAndUpdate(
+    { _id: userId, isActive: true },
+    {
+      $set: { isActive: false },
+      $unset: { firebaseUid: '' },
+    },
+    { new: true }
+  );
+}
+
 // OTP operations (still use phone for OTP)
 async function storeOtp(phone, otp, userId = null) {
   return UserOtp.findOneAndUpdate(
@@ -87,6 +103,7 @@ module.exports = {
   createUser,
   updateUser,
   deactivateUserByPhone,
+  deactivateUserById,
   storeOtp,
   fetchOtp,
   deleteOtp,
