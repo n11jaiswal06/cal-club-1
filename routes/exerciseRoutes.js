@@ -1,5 +1,14 @@
 const ExerciseService = require('../services/exerciseService');
-const { parseBody } = require('../utils/parseBody');
+const parseBody = require('../utils/parseBody');
+
+// parseBody is callback-based across the rest of the codebase. Wrap it so
+// this file can keep async/await — switching every route to callback style
+// would be more invasive than this six-line adapter.
+function parseBodyAsync(req) {
+  return new Promise((resolve, reject) => {
+    parseBody(req, (err, data) => (err ? reject(err) : resolve(data)));
+  });
+}
 
 /**
  * Exercise routes handler
@@ -20,7 +29,7 @@ async function exerciseRoutes(req, res) {
   try {
     // POST /api/exercise-log - Log a new exercise
     if (method === 'POST' && url === '/api/exercise-log') {
-      const body = await parseBody(req);
+      const body = await parseBodyAsync(req);
       const { exercise_id, intensity, duration_min, logged_for_date } = body;
 
       const log = await ExerciseService.logExercise(
