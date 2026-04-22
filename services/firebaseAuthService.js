@@ -47,11 +47,14 @@ class FirebaseAuthService {
       const firebaseUid = decodedToken.uid;
       const phoneNumber = decodedToken.phone_number;
       const email = decodedToken.email || null;
+      const rawName = typeof decodedToken.name === 'string' ? decodedToken.name.trim() : '';
+      const name = rawName || null;
 
       return {
         firebaseUid,
         phone: phoneNumber || null,
         email,
+        name,
         decodedToken
       };
     } catch (error) {

@@ -324,7 +324,7 @@ class AuthService {
   static async verifyFirebaseToken(idToken) {
     // Verify Firebase ID token
     const firebaseData = await FirebaseAuthService.verifyIdToken(idToken);
-    const { firebaseUid, phone, email } = firebaseData;
+    const { firebaseUid, phone, email, name } = firebaseData;
 
     // Try to find an existing user by:
     // 1) phone (for phone auth),
@@ -350,6 +350,7 @@ class AuthService {
       };
       if (phone) newUserData.phone = phone;
       if (email) newUserData.email = email.toLowerCase();
+      if (name) newUserData.name = name;
       user = await createUser(newUserData);
     } else {
       const updateData = { lastLoginAt: new Date() };
@@ -365,6 +366,9 @@ class AuthService {
       }
       if (!user.phone && phone) {
         updateData.phone = phone;
+      }
+      if (!user.name && name) {
+        updateData.name = name;
       }
 
       user = await updateUser(user._id, updateData);
