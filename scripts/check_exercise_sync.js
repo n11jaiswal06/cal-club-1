@@ -46,6 +46,11 @@ async function fetchFrontendSource() {
   }
   const url = process.env.FRONTEND_EXERCISE_URL || DEFAULT_FRONTEND_URL;
   const res = await fetch(url);
+  // During initial rollout, the frontend file may not exist on main yet.
+  // Allow the check to pass with a warning so the backend can ship first.
+  // Once the frontend PR lands, the file exists and subsequent checks
+  // gate on real drift.
+  if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Failed to fetch frontend source: ${res.status} ${res.statusText} (${url})`);
   return res.text();
 }
@@ -103,6 +108,14 @@ function diff(backend, frontend) {
 (async () => {
   const backend = loadBackend();
   const frontendSource = await fetchFrontendSource();
+  if (frontendSource === null) {
+    console.log(`Backend exercises: ${Object.keys(backend).length}`);
+    console.warn('⚠️  Frontend file not found on main yet — skipping drift check.');
+    console.warn('   This is expected during the initial rollout of the exercise list.');
+    console.warn('   Once lib/data/exercise_data.dart lands on frontend main, subsequent');
+    console.warn('   PRs will gate on real drift.');
+    process.exit(0);
+  }
   const frontend = parseFrontend(frontendSource);
 
   const backendCount = Object.keys(backend).length;
