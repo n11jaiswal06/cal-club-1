@@ -1,5 +1,6 @@
 const MealService = require('./mealService');
 const HeroBriefService = require('./heroBriefService');
+const { formatExerciseBurnWidget } = require('./exerciseBurnWidgetService');
 const { findUserById } = require('../models/user');
 const User = require('../models/schemas/User');
 const Question = require('../models/schemas/Question');
@@ -156,6 +157,10 @@ class AppFormatService {
 
       // Add logged widget
       widgets.push(this.formatLoggedWidget(todayMeals));
+
+      // Exercise burn widget (Daily Steps row is always present;
+      // workouts appended from ActivityStore EXERCISE category).
+      widgets.push(await formatExerciseBurnWidget(userId, istDateStr));
 
       // Add paywall widget if user does NOT have premium access
       if (!membershipStatus.hasAccess) {
