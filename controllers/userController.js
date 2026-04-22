@@ -79,56 +79,72 @@ function updateUserProfile(req, res) {
   });
 }
 
+/**
+ * DELETE /users
+ *
+ * Deactivates the caller's own account. The user is identified from the
+ * authenticated Bearer token (`req.user.userId`), not from request body —
+ * this lets OAuth-only users (Google / Apple) trigger deletion even though
+ * they have no phone number on file, and prevents one user from passing
+ * another's identifier in the body.
+ *
+ * Side effects on the target user:
+ *   - `isActive` flipped to false
+ *   - `firebaseUid` cleared so the sparse-unique index releases the slot
+ *     and the next Google/Apple sign-in can create a fresh record
+ *   - onboarding answers + meals soft-deleted
+ *   - active auth token revoked
+ */
 async function deleteUser(req, res) {
-  parseBody(req, async (err, data) => {
-    if (err || !data.phone) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Phone number is required' }));
+  try {
+    const userId = req.user && req.user.userId;
+    if (!userId) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Authentication required' }));
       return;
     }
 
-    try {
-      const { deactivateUserByPhone, findUserByPhone } = require('../models/user');
-      const OnboardingService = require('../services/onboardingService');
-      const MealService = require('../services/mealService');
-      
-      // First find the user to get their ID
-      const user = await findUserByPhone(data.phone);
-      if (!user) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'User not found' }));
-        return;
-      }
+    const {
+      deactivateUserById,
+      findUserById,
+      revokeAuthToken,
+    } = require('../models/user');
+    const OnboardingService = require('../services/onboardingService');
+    const MealService = require('../services/mealService');
 
-      // Deactivate the user
-      const result = await deactivateUserByPhone(data.phone);
-      
-      if (!result) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'User not found or already deactivated' }));
-        return;
-      }
-
-      // Soft delete all user answers
-      await OnboardingService.deleteAllAnswersForUser(user._id);
-      
-      // Soft delete all user meals
-      await MealService.deleteAllMealsForUser(user._id);
-
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ 
-        message: 'User deactivated successfully and all related data soft deleted',
-        phone: data.phone,
-        isActive: false,
-        userId: user._id
-      }));
-    } catch (error) {
-      reportError(error, { req });
-      console.error('Error deactivating user:', error);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Failed to deactivate user', details: error.message }));
+    const existing = await findUserById(userId);
+    if (!existing || !existing.isActive) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'User not found or already deactivated' }));
+      return;
     }
-  });
+
+    const deactivated = await deactivateUserById(userId);
+    if (!deactivated) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Failed to deactivate user' }));
+      return;
+    }
+
+    await OnboardingService.deleteAllAnswersForUser(userId);
+    await MealService.deleteAllMealsForUser(userId);
+    await revokeAuthToken(userId);
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      message: 'User deactivated successfully and all related data soft deleted',
+      userId: String(userId),
+      isActive: false,
+    }));
+  } catch (error) {
+    reportError(error, { req });
+    console.error('Error deactivating user:', error);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: 'Failed to deactivate user',
+      details: error.message,
+    }));
+  }
 }
 
 function validateGoals(goals) {
