@@ -114,7 +114,10 @@ function buildWorkoutEntry(item, sourceLower) {
   };
 }
 
-async function formatExerciseBurnWidget(userId, dateStr) {
+// Computes both the widget payload and the total kcal burned for a day.
+// Same data source feeds two surfaces: the exercise_burn_widget and the
+// hero section's calorie progress bar (goal + burn = effective target).
+async function buildExerciseBurnContext(userId, dateStr) {
   const [exerciseDocs, summaryDocs, weightKg] = await Promise.all([
     ActivityStoreService.fetch(userId, dateStr, { category: 'EXERCISE' }),
     ActivityStoreService.fetch(userId, dateStr, { category: 'SUMMARY' }),
@@ -136,7 +139,7 @@ async function formatExerciseBurnWidget(userId, dateStr) {
   const exercises = [stepsEntry, ...workouts];
   const totalCalories = exercises.reduce((sum, e) => sum + (e.calories || 0), 0);
 
-  return {
+  const widget = {
     widgetType: 'exercise_burn_widget',
     widgetData: {
       title: 'Exercise burn',
@@ -144,6 +147,16 @@ async function formatExerciseBurnWidget(userId, dateStr) {
       exercises,
     },
   };
+
+  return { widget, totalCalories };
 }
 
-module.exports = { formatExerciseBurnWidget };
+async function formatExerciseBurnWidget(userId, dateStr) {
+  const { widget } = await buildExerciseBurnContext(userId, dateStr);
+  return widget;
+}
+
+module.exports = {
+  buildExerciseBurnContext,
+  formatExerciseBurnWidget,
+};

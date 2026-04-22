@@ -1,6 +1,6 @@
 const MealService = require('./mealService');
 const HeroBriefService = require('./heroBriefService');
-const { formatExerciseBurnWidget } = require('./exerciseBurnWidgetService');
+const { buildExerciseBurnContext } = require('./exerciseBurnWidgetService');
 const { findUserById } = require('../models/user');
 const User = require('../models/schemas/User');
 const Question = require('../models/schemas/Question');
@@ -147,6 +147,12 @@ class AppFormatService {
       const todayIST = getTodayDateString();
       const isPastDay = date < todayIST;
 
+      // Exercise burn: one query feeds both the hero section's calorie
+      // progress bar (goal + burn = effective target) and the
+      // exercise_burn_widget rendered below.
+      const exerciseBurn = await buildExerciseBurnContext(userId, istDateStr);
+      todayData.exerciseBurn = exerciseBurn.totalCalories;
+
       // --- Hero section ---
       const heroSectionWidget = await this.formatHeroSectionWidget(
         userId, date, todayData, goals, clientPhase, regenerate, isPastDay
@@ -160,7 +166,7 @@ class AppFormatService {
 
       // Exercise burn widget (Daily Steps row is always present;
       // workouts appended from ActivityStore EXERCISE category).
-      widgets.push(await formatExerciseBurnWidget(userId, istDateStr));
+      widgets.push(exerciseBurn.widget);
 
       // Add paywall widget if user does NOT have premium access
       if (!membershipStatus.hasAccess) {
