@@ -76,6 +76,39 @@ class AiService {
   }
 
   /**
+   * Catches generic LLM-generated meal titles that slipped past the prompt rules.
+   * Matches standalone cuisine/mealtype labels like "Indian meal", "Lunch plate",
+   * "Healthy bowl" — not item-specific names like "Chicken Biryani".
+   */
+  static GENERIC_TITLE_REGEX = /^\s*(indian|asian|italian|mexican|chinese|thai|japanese|korean|healthy|mixed|quick|balanced|light|simple|protein|veggie|vegan|vegetarian|lunch|dinner|breakfast|snack|brunch)?\s*(meal|lunch|dinner|breakfast|snack|food|dish|plate|bowl|combo|platter)\s*$/i;
+
+  /**
+   * Build a meal title from Step 1 items by taking the first 1-2 items tagged
+   * role="main". Fallback path — only runs when the LLM produced a generic title.
+   * Uses Step 1 items (before Step 2 decomposition) because role lives there.
+   */
+  static rebuildTitleFromItems(items) {
+    if (!Array.isArray(items) || items.length === 0) return 'Meal';
+    const mains = items.filter(i => i && i.role === 'main' && i.name);
+    const pool = mains.length > 0 ? mains : items.filter(i => i && i.name);
+    const names = pool.slice(0, 2).map(i => i.name);
+    if (names.length === 0) return 'Meal';
+    return names.length === 1 ? names[0] : names.join(' & ');
+  }
+
+  /**
+   * Returns a trimmed title if the LLM produced something specific, otherwise
+   * rebuilds from items[].role === 'main'.
+   */
+  static sanitizeMealTitle(rawTitle, items) {
+    const trimmed = (rawTitle || '').trim();
+    if (!trimmed || this.GENERIC_TITLE_REGEX.test(trimmed)) {
+      return this.rebuildTitleFromItems(items);
+    }
+    return trimmed;
+  }
+
+  /**
    * Quick Add: text-only food parsing. Minimal prompt — just parse what the user typed.
    */
   static async analyzeQuantityFromText(hint) {
@@ -106,7 +139,18 @@ GRAVY TYPE: for composite curry/gravy dishes, set gravyType to the most common p
 
 visibleComponents: always set to []. This field is only used for image-based analysis.
 
-mealName: derive a concise, descriptive meal name from the user's input.
+MEAL NAME RULES (for the "mealName" field only):
+Max 5 words. Never use generic labels like "Indian meal", "Lunch plate", "Healthy bowl", or any cuisine/mealtype name — always use actual food items. Build the name from items with role="main" only; ignore sides and condiments. If one main dominates, use just that ("Chicken Biryani"); otherwise join 1-2 mains with "&" ("Chicken Curry & Roti").
+
+ROLE (per item):
+• "main": proteins, grains, cooked vegetables, composite hero dishes.
+• "side": accompaniments — raita, pickle, chutney, papad, small salads.
+• "condiment": sauces, dressings, oils, mayo, ketchup, honey, jam, butter, ghee.
+
+Examples:
+roti + chicken curry + pickle → "Chicken Curry & Roti"
+salad greens + grilled chicken + mayo dressing → "Grilled Chicken Salad"
+chicken biryani + raita → "Chicken Biryani"
 
 QUANTITY & WEIGHT:
 The user's description is the primary signal. If they specify a size or amount ("big bowl", "half a roti", "2 glasses"), use that exactly.
@@ -127,6 +171,7 @@ MUST always have a numeric value — never null. Unit must be "g" for solids, "m
   "items": [
     {
       "name": "Item name",
+      "role": "main",
       "displayQuantity": { "value": 1, "unit": "cup" },
       "measureQuantity": { "value": 150, "unit": "g" },
       "composite": false,
@@ -276,6 +321,19 @@ PORTION SIZE CALIBRATION: Photos often make portions appear larger than they are
 
 When estimating, start from the lower end of typical ranges unless the portion clearly appears oversized.
 
+MEAL NAME RULES (for the "mealName" field only):
+Max 5 words. Never use generic labels like "Indian meal", "Lunch plate", "Healthy bowl", or any cuisine/mealtype name — always use actual food items. Build the name from items with role="main" only; ignore sides and condiments. If one main dominates, use just that ("Chicken Biryani"); otherwise join 1-2 mains with "&" ("Chicken Curry & Roti").
+
+ROLE (per item):
+• "main": proteins, grains, cooked vegetables, composite hero dishes.
+• "side": accompaniments — raita, pickle, chutney, papad, small salads.
+• "condiment": sauces, dressings, oils, mayo, ketchup, honey, jam, butter, ghee.
+
+Examples:
+roti + chicken curry + pickle → "Chicken Curry & Roti"
+salad greens + grilled chicken + mayo dressing → "Grilled Chicken Salad"
+chicken biryani + raita → "Chicken Biryani"
+
 OUTPUT
 Return ONLY raw JSON. No markdown, no explanation.
 
@@ -284,6 +342,7 @@ Return ONLY raw JSON. No markdown, no explanation.
   "items": [
     {
       "name": "Item name",
+      "role": "main",
       "displayQuantity": { "value": 1, "unit": "cup" },
       "measureQuantity": { "value": 150, "unit": "g" },
       "composite": false,
@@ -308,13 +367,13 @@ measureQuantity: actual weight or volume for nutrition calculation.
 EXAMPLE
 
 {
-  "mealName": "Indian Thali",
+  "mealName": "Chicken Biryani & Bhuna",
   "items": [
-    { "name": "Chicken Biryani", "displayQuantity": { "value": 1, "unit": "medium bowl" }, "measureQuantity": { "value": 300, "unit": "g" }, "composite": true, "visibleComponents": ["basmati rice", "bone-in chicken pieces", "fried onions", "ghee", "whole spices"], "gravyType": null },
-    { "name": "Chicken Bhuna", "displayQuantity": { "value": 1, "unit": "small bowl" }, "measureQuantity": { "value": 200, "unit": "g" }, "composite": true, "visibleComponents": ["bone-in chicken pieces", "thick dry masala coating", "onions"], "gravyType": "dry" },
-    { "name": "Dal", "displayQuantity": { "value": 1, "unit": "small bowl" }, "measureQuantity": { "value": 150, "unit": "g" }, "composite": false, "visibleComponents": [], "gravyType": null },
-    { "name": "Roti", "displayQuantity": { "value": 2, "unit": "rotis" }, "measureQuantity": { "value": 60, "unit": "g" }, "composite": false, "visibleComponents": [], "gravyType": null },
-    { "name": "Buttermilk", "displayQuantity": { "value": 1, "unit": "glass" }, "measureQuantity": { "value": 250, "unit": "ml" }, "composite": false, "visibleComponents": [], "gravyType": null }
+    { "name": "Chicken Biryani", "role": "main", "displayQuantity": { "value": 1, "unit": "medium bowl" }, "measureQuantity": { "value": 300, "unit": "g" }, "composite": true, "visibleComponents": ["basmati rice", "bone-in chicken pieces", "fried onions", "ghee", "whole spices"], "gravyType": null },
+    { "name": "Chicken Bhuna", "role": "main", "displayQuantity": { "value": 1, "unit": "small bowl" }, "measureQuantity": { "value": 200, "unit": "g" }, "composite": true, "visibleComponents": ["bone-in chicken pieces", "thick dry masala coating", "onions"], "gravyType": "dry" },
+    { "name": "Dal", "role": "main", "displayQuantity": { "value": 1, "unit": "small bowl" }, "measureQuantity": { "value": 150, "unit": "g" }, "composite": false, "visibleComponents": [], "gravyType": null },
+    { "name": "Roti", "role": "main", "displayQuantity": { "value": 2, "unit": "rotis" }, "measureQuantity": { "value": 60, "unit": "g" }, "composite": false, "visibleComponents": [], "gravyType": null },
+    { "name": "Buttermilk", "role": "side", "displayQuantity": { "value": 1, "unit": "glass" }, "measureQuantity": { "value": 250, "unit": "ml" }, "composite": false, "visibleComponents": [], "gravyType": null }
   ]
 }
 
@@ -365,6 +424,14 @@ Return only valid JSON, no additional text.`;
       console.log(`🤖 [V4] Step 1: Enhanced Prompt 1 (with itemType classification)`);
       const quantityRaw = await this.analyzeQuantityWithGeminiV4(imageUrl, hint);
       const quantityParsed = this.parseAIResult(quantityRaw.response);
+
+      // Sanitize the meal title before Step 2 decomposition strips role from composite items.
+      const originalTitle = quantityParsed.mealName;
+      quantityParsed.mealName = this.sanitizeMealTitle(originalTitle, quantityParsed.items);
+      if (originalTitle !== quantityParsed.mealName) {
+        console.log(`🤖 [V4] Meal title rebuilt from items: "${originalTitle}" → "${quantityParsed.mealName}"`);
+      }
+
       const step1Ms = Date.now() - step1Start;
       console.log(`🤖 [V4] Step 1 complete — ${quantityParsed.items.length} items identified, mealName="${quantityParsed.mealName}" [${step1Ms}ms]`);
 
@@ -901,7 +968,7 @@ Guidelines:
 • Provide nutrition for EXACT quantity specified
 • Main items: proteins/primary carbs (paneer, chicken, rice, roti)
 • Minor items: sides/condiments (raita, salad, chutney)
-• Keep meal names concise (max 4-5 words)
+• Keep meal names concise (max 4-5 words). Use actual food items — never generic labels like "Indian meal", "Lunch plate", "Healthy bowl", or any cuisine/mealtype name. If one main dominates, use just that ("Chicken Biryani"); otherwise join 1-2 mains with "&" ("Chicken Curry & Roti").
 • If main item changed: update meal name
 • If only minor items changed: keep original name
 
