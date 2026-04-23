@@ -23,6 +23,25 @@ function sanitizeUserInput(text, maxLength = 200) {
     .trim();
 }
 
+/**
+ * Shared prompt block that drives meal-title quality and per-item role tagging.
+ * Interpolated into both the quick-add and image-scan prompts — edit once, both
+ * pipelines pick it up. See aiService.sanitizeMealTitle for the server-side
+ * fallback that catches generic titles the LLM still produces.
+ */
+const MEAL_NAME_RULES_BLOCK = `MEAL NAME RULES (for the "mealName" field only):
+Max 5 words. Never use generic labels like "Indian meal", "Lunch plate", "Healthy bowl", or any cuisine/mealtype name — always use actual food items. Build the name from items with role="main" only; ignore sides and condiments. If one main dominates, use just that ("Chicken Biryani"); otherwise join 1-2 mains with "&" ("Chicken Curry & Roti").
+
+ROLE (per item):
+• "main": proteins, grains, cooked vegetables, composite hero dishes.
+• "side": accompaniments — raita, pickle, chutney, papad, small salads.
+• "condiment": sauces, dressings, oils, mayo, ketchup, honey, jam, butter, ghee.
+
+Examples:
+roti + chicken curry + pickle → "Chicken Curry & Roti"
+salad greens + grilled chicken + mayo dressing → "Grilled Chicken Salad"
+chicken biryani + raita → "Chicken Biryani"`;
+
 class AiService {
   static async fetchImageAsBase64(url) {
     // Handle data URIs directly
@@ -139,18 +158,7 @@ GRAVY TYPE: for composite curry/gravy dishes, set gravyType to the most common p
 
 visibleComponents: always set to []. This field is only used for image-based analysis.
 
-MEAL NAME RULES (for the "mealName" field only):
-Max 5 words. Never use generic labels like "Indian meal", "Lunch plate", "Healthy bowl", or any cuisine/mealtype name — always use actual food items. Build the name from items with role="main" only; ignore sides and condiments. If one main dominates, use just that ("Chicken Biryani"); otherwise join 1-2 mains with "&" ("Chicken Curry & Roti").
-
-ROLE (per item):
-• "main": proteins, grains, cooked vegetables, composite hero dishes.
-• "side": accompaniments — raita, pickle, chutney, papad, small salads.
-• "condiment": sauces, dressings, oils, mayo, ketchup, honey, jam, butter, ghee.
-
-Examples:
-roti + chicken curry + pickle → "Chicken Curry & Roti"
-salad greens + grilled chicken + mayo dressing → "Grilled Chicken Salad"
-chicken biryani + raita → "Chicken Biryani"
+${MEAL_NAME_RULES_BLOCK}
 
 QUANTITY & WEIGHT:
 The user's description is the primary signal. If they specify a size or amount ("big bowl", "half a roti", "2 glasses"), use that exactly.
@@ -321,18 +329,7 @@ PORTION SIZE CALIBRATION: Photos often make portions appear larger than they are
 
 When estimating, start from the lower end of typical ranges unless the portion clearly appears oversized.
 
-MEAL NAME RULES (for the "mealName" field only):
-Max 5 words. Never use generic labels like "Indian meal", "Lunch plate", "Healthy bowl", or any cuisine/mealtype name — always use actual food items. Build the name from items with role="main" only; ignore sides and condiments. If one main dominates, use just that ("Chicken Biryani"); otherwise join 1-2 mains with "&" ("Chicken Curry & Roti").
-
-ROLE (per item):
-• "main": proteins, grains, cooked vegetables, composite hero dishes.
-• "side": accompaniments — raita, pickle, chutney, papad, small salads.
-• "condiment": sauces, dressings, oils, mayo, ketchup, honey, jam, butter, ghee.
-
-Examples:
-roti + chicken curry + pickle → "Chicken Curry & Roti"
-salad greens + grilled chicken + mayo dressing → "Grilled Chicken Salad"
-chicken biryani + raita → "Chicken Biryani"
+${MEAL_NAME_RULES_BLOCK}
 
 OUTPUT
 Return ONLY raw JSON. No markdown, no explanation.

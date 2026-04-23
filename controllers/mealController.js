@@ -420,10 +420,17 @@ async function updateMeal(req, res) {
         item.nutrition.carbs.final = null;
         item.nutrition.fat.final = null;
 
-        // Update overall meal name if provided by AI
+        // Update overall meal name if provided by AI.
+        // Sanitize via the shared helper so generic titles ("Indian meal",
+        // "Lunch plate") produced by the edit LLM don't leak through.
         if (aiResult.updatedMealName && aiResult.updatedMealName !== meal.name) {
-          changes.push({ itemId, field: 'mealName', previousValue: meal.name, newValue: aiResult.updatedMealName });
-          meal.name = aiResult.updatedMealName;
+          const cleanName = AiService.sanitizeMealTitle(aiResult.updatedMealName, meal.items.map(i => ({
+            name: (i.name && (i.name.final || i.name.llm)) || null
+          })));
+          if (cleanName !== meal.name) {
+            changes.push({ itemId, field: 'mealName', previousValue: meal.name, newValue: cleanName });
+            meal.name = cleanName;
+          }
         }
 
         // Recompute total nutrition
