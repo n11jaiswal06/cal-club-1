@@ -28,6 +28,7 @@ require('dotenv').config();
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const FoodItem = require('../models/schemas/FoodItem');
 const Meal = require('../models/schemas/Meal');
+const { EXCLUDED_SERVING_UNITS, isExcludedServingUnit } = require('../utils/servingUnits');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const flashModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
@@ -36,12 +37,22 @@ const ARGS = process.argv.slice(2);
 const DRY_RUN = ARGS.includes('--dry-run');
 const ONLY_MISSING = ARGS.includes('--only-missing');
 const LIMIT_ARG = ARGS.find(a => a.startsWith('--limit'));
-const LIMIT = LIMIT_ARG ? parseInt(LIMIT_ARG.split('=')[1] || ARGS[ARGS.indexOf(LIMIT_ARG) + 1], 10) : null;
+const LIMIT = (() => {
+  if (!LIMIT_ARG) return null;
+  const raw = LIMIT_ARG.includes('=')
+    ? LIMIT_ARG.split('=')[1]
+    : ARGS[ARGS.indexOf(LIMIT_ARG) + 1];
+  const parsed = parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.error(`Invalid --limit value: "${raw}". Expected a positive integer.`);
+    process.exit(1);
+  }
+  return parsed;
+})();
 
 const BATCH_SIZE = 15;
 const GRAMS_BUCKET_SOLID = 5;
 const GRAMS_BUCKET_BOWL = 10;
-const EXCLUDED_SERVING_UNITS = new Set(['g', 'gram', 'grams', 'ml', 'milliliter', 'milliliters']);
 
 function roundToBucket(value, unit) {
   const bucket = /bowl|cup|glass/i.test(unit) ? GRAMS_BUCKET_BOWL : GRAMS_BUCKET_SOLID;
@@ -69,10 +80,7 @@ function modeRounded(values, unit) {
 async function aggregateFromMeals() {
   // Prefer .final (user-edited values) but fall back to .llm. V4 currently writes
   // .final = null by convention, so without this fallback we'd miss ~98% of data.
-  // Also skip unit in {'g', 'ml', 'gram', 'grams'} — those are the measure axis,
-  // not serving sizes users would pick from a typeahead.
-  const EXCLUDED_UNITS = ['g', 'ml', 'gram', 'grams', 'milliliter', 'milliliters'];
-
+  // Excluded units are the measure axis (g/ml), not serving sizes.
   const pipeline = [
     { $unwind: '$items' },
     {
@@ -96,7 +104,7 @@ async function aggregateFromMeals() {
     },
     {
       $match: {
-        unit: { $nin: [null, ...EXCLUDED_UNITS] },
+        unit: { $nin: [null, ...EXCLUDED_SERVING_UNITS] },
         displayValue: { $gt: 0 },
         measureValue: { $gt: 0 }
       }
@@ -186,7 +194,7 @@ Serving sizes:
         ? entry.servingSizes
             .filter(s =>
               s && typeof s.unit === 'string' && typeof s.grams === 'number' && s.grams > 0
-              && !EXCLUDED_SERVING_UNITS.has(s.unit.trim().toLowerCase())
+              && !isExcludedServingUnit(s.unit)
             )
             .map(s => ({
               unit: s.unit.trim(),

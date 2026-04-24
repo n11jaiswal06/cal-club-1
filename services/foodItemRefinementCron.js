@@ -17,11 +17,11 @@ const cron = require('node-cron');
 const FoodItem = require('../models/schemas/FoodItem');
 const Meal = require('../models/schemas/Meal');
 const { reportError } = require('../utils/sentryReporter');
+const { EXCLUDED_SERVING_UNITS } = require('../utils/servingUnits');
 
 const MIN_SAMPLES_FOR_REPLACE = 3;
 const GRAMS_BUCKET_SOLID = 5;
 const GRAMS_BUCKET_BOWL = 10;
-const EXCLUDED_UNITS = ['g', 'ml', 'gram', 'grams', 'milliliter', 'milliliters'];
 
 function roundToBucket(value, unit) {
   const bucket = /bowl|cup|glass/i.test(unit) ? GRAMS_BUCKET_BOWL : GRAMS_BUCKET_SOLID;
@@ -60,7 +60,7 @@ async function aggregateAllFoodItems() {
     },
     {
       $match: {
-        unit: { $nin: [null, ...EXCLUDED_UNITS] },
+        unit: { $nin: [null, ...EXCLUDED_SERVING_UNITS] },
         displayValue: { $gt: 0 },
         measureValue: { $gt: 0 }
       }
