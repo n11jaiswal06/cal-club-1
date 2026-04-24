@@ -3,9 +3,9 @@ const vectorSearchService = require('../services/vectorSearchService');
 const { reportError } = require('../utils/sentryReporter');
 
 const MIN_QUERY_LENGTH = 3;
+const MAX_QUERY_LENGTH = 100;
 const MAX_RESULTS = 8;
 const SEMANTIC_FALLBACK_THRESHOLD = 5;
-const DB_CANDIDATE_LIMIT = 30;
 
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -57,6 +57,14 @@ async function searchFoods(req, res) {
       return true;
     }
 
+    if (q.length > MAX_QUERY_LENGTH) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: `Query too long (max ${MAX_QUERY_LENGTH} characters).`
+      }));
+      return true;
+    }
+
     const queryLower = q.toLowerCase();
     const escaped = escapeRegex(queryLower);
     const substringRegex = new RegExp(escaped, 'i');
@@ -68,7 +76,6 @@ async function searchFoods(req, res) {
       ]
     })
       .sort({ usageCount: -1 })
-      .limit(DB_CANDIDATE_LIMIT)
       .lean();
 
     const seen = new Set();
@@ -78,7 +85,7 @@ async function searchFoods(req, res) {
       if (seen.has(id)) continue;
       seen.add(id);
       const { tier, label } = classifyMatch(food, queryLower);
-      classified.push({ food, tier, label });
+      classified.push({ food, tier, label, confidence: null });
     }
 
     // Semantic fallback only when substring match didn't give us enough candidates.
@@ -100,7 +107,12 @@ async function searchFoods(req, res) {
             const full = byId.get(id);
             if (!full) continue;
             seen.add(id);
-            classified.push({ food: full, tier: 5, label: 'semantic' });
+            classified.push({
+              food: full,
+              tier: 5,
+              label: 'semantic',
+              confidence: hit.confidence || 0
+            });
           }
         }
       } catch (err) {
@@ -109,8 +121,11 @@ async function searchFoods(req, res) {
       }
     }
 
+    // Tier ascending, then: semantic tier by vector confidence desc,
+    // substring tiers by usageCount desc.
     classified.sort((a, b) => {
       if (a.tier !== b.tier) return a.tier - b.tier;
+      if (a.tier === 5) return (b.confidence || 0) - (a.confidence || 0);
       return (b.food.usageCount || 0) - (a.food.usageCount || 0);
     });
 
