@@ -61,6 +61,26 @@ const foodItemSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // Per-food unit → grams/ml conversions for typeahead and edit flows.
+  // source: 'aggregated' (derived from Meal history mode), 'llm' (generated at
+  // FoodItem creation or ad-hoc resolution), 'user_confirmed' (reserved).
+  servingSizes: {
+    type: [
+      new mongoose.Schema({
+        unit: { type: String, required: true },
+        grams: { type: Number, required: true },
+        isDefault: { type: Boolean, default: false },
+        source: {
+          type: String,
+          enum: ['aggregated', 'llm', 'user_confirmed'],
+          default: 'llm'
+        },
+        sampleSize: { type: Number, default: null },
+        updatedAt: { type: Date, default: Date.now }
+      }, { _id: false })
+    ],
+    default: []
+  },
   // Tracking and metadata
   usageCount: {
     type: Number,

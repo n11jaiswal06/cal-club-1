@@ -262,8 +262,36 @@ async function cacheLLMResults(nutritionMap, foodItems) {
     embedding: embeddings[i] || null
   }));
 
+  // Build a lookup from original name → observed quantity context so we can
+  // seed servingSizes with the single data point we already know.
+  const observedByName = {};
+  for (const f of itemsToCache) {
+    observedByName[f.name] = {
+      displayQuantity: f.observedDisplayQuantity || null,
+      grams: f.observedGrams || null
+    };
+  }
+
   for (const r of results) {
     if (!r) continue;
+
+    const observed = observedByName[r.name];
+    const servingSizes = [];
+    if (observed && observed.displayQuantity && observed.grams) {
+      const dq = observed.displayQuantity;
+      const dqValue = dq.value || (dq.llm && dq.llm.value) || (dq.final && dq.final.value);
+      const dqUnit = dq.unit || (dq.llm && dq.llm.unit) || (dq.final && dq.final.unit);
+      if (dqValue && dqUnit && dqUnit !== 'g' && dqUnit !== 'ml') {
+        servingSizes.push({
+          unit: dqUnit,
+          grams: Math.round(observed.grams / dqValue),
+          isDefault: true,
+          source: 'aggregated',
+          sampleSize: 1,
+          updatedAt: new Date()
+        });
+      }
+    }
 
     const cachedFood = new FoodItem({
       name: r.name,
@@ -278,6 +306,7 @@ async function cacheLLMResults(nutritionMap, foodItems) {
       carbsPer100g: r.llmData.carbsPer100g,
       fatPer100g: r.llmData.fatPer100g,
       fiberPer100g: r.llmData.fiberPer100g || 0,
+      servingSizes,
       usageCount: 1,
       llmModel: 'gemini-2.5-flash',
       llmGeneratedAt: new Date(),
@@ -443,13 +472,20 @@ async function calculateNutrition(items) {
     })
   );
 
-  // Step 4: Collect unique DB misses from component lookups
+  // Step 4: Collect unique DB misses from component lookups.
+  // Preserve the observed displayQuantity/grams so cacheLLMResults can seed
+  // servingSizes from real data instead of an LLM guess.
   const dbMissNames = new Set();
   const dbMissItems = [];
   for (const result of dbResults) {
     if (result.nutritionSource === 'db_miss' && !dbMissNames.has(result.name)) {
       dbMissNames.add(result.name);
-      dbMissItems.push({ name: result.name, category: result.category });
+      dbMissItems.push({
+        name: result.name,
+        category: result.category,
+        observedDisplayQuantity: result.displayQuantity || null,
+        observedGrams: result.grams || null
+      });
     }
   }
 
