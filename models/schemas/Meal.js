@@ -84,7 +84,11 @@ const itemSchema = new mongoose.Schema({
   proteinForm: { type: String, default: null },
   glycemicIndex: {
     llm: Number
-  }
+  },
+  // Whether the user flagged this as a "main dish" on add/edit. Informs
+  // optional downstream meal-title regeneration and analytics. Nullable —
+  // legacy items pre-Stage 3 have no value.
+  isMain: { type: Boolean, default: null }
 }, { _id: false });
 
 const photoSchema = new mongoose.Schema({
