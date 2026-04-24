@@ -6,25 +6,83 @@ const MIN_QUERY_LENGTH = 3;
 const MAX_QUERY_LENGTH = 100;
 const MAX_RESULTS = 8;
 const SEMANTIC_FALLBACK_THRESHOLD = 5;
+const FUZZY_MIN_QUERY_LENGTH = 4;   // below this, fuzzy matches are too noisy
+const FUZZY_MAX_DISTANCE = 1;       // 1 edit — catches typical typos without false positives
 
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
+ * Classic Levenshtein distance between two strings. Used for typo-tolerant
+ * matching when substring tiers return no hits. ~O(len(a) × len(b)) with
+ * short strings (≤ ~20 chars), so cost is negligible for food names.
+ */
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const m = Array.from({ length: rows }, () => new Array(cols).fill(0));
+  for (let i = 0; i < rows; i++) m[i][0] = i;
+  for (let j = 0; j < cols; j++) m[0][j] = j;
+  for (let i = 1; i < rows; i++) {
+    for (let j = 1; j < cols; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      m[i][j] = Math.min(
+        m[i - 1][j] + 1,
+        m[i][j - 1] + 1,
+        m[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return m[a.length][b.length];
+}
+
+/**
+ * Scan all FoodItems and keep those whose name (full or any word) or any alias
+ * is within FUZZY_MAX_DISTANCE of the query. Runs only when the substring
+ * path was thin enough to trigger the semantic fallback (SEMANTIC_FALLBACK_THRESHOLD).
+ */
+async function fuzzyCandidates(queryLower, alreadySeen) {
+  if (queryLower.length < FUZZY_MIN_QUERY_LENGTH) return [];
+  const all = await FoodItem.find({}).lean();
+  const hits = [];
+  for (const food of all) {
+    const id = String(food._id);
+    if (alreadySeen.has(id)) continue;
+    const nameLower = (food.name || '').toLowerCase();
+    const nameWords = nameLower.split(/[\s,()\-]+/).filter(Boolean);
+    const aliases = (food.aliases || []).map(a => String(a).toLowerCase());
+
+    // Name-level fuzzy: compare to full name and to each word.
+    const nameMatch =
+      levenshtein(queryLower, nameLower) <= FUZZY_MAX_DISTANCE ||
+      nameWords.some(w => levenshtein(queryLower, w) <= FUZZY_MAX_DISTANCE);
+    if (nameMatch) {
+      hits.push({ food, tier: 6, label: 'name_fuzzy', confidence: null });
+      continue;
+    }
+
+    const aliasMatch = aliases.some(a => levenshtein(queryLower, a) <= FUZZY_MAX_DISTANCE);
+    if (aliasMatch) {
+      hits.push({ food, tier: 7, label: 'alias_fuzzy', confidence: null });
+    }
+  }
+  return hits;
+}
+
+/**
  * Classify how a food matched the query so we can rank:
  *   1 name_prefix        "rot" → "Roti"
- *   2 name_word_prefix   "yogurt" → "Skyr yogurt dip" (query starts a word in the name)
+ *   2 name_word_prefix   "yogurt" → "Skyr yogurt dip"
  *   3 alias_prefix       "rot" → "Chapati" (alias "roti")
  *   4 name_contains      "rot" → "Parotta"
  *   5 alias_contains     "rot" → food whose alias includes "...rot..."
- *   6 semantic           vector similarity (no substring match)
- *
- * Rationale for name_word_prefix above alias_prefix: when the query word
- * literally appears in a food's name (as a standalone word), that's a
- * stronger signal than a synonym match via aliases. "yogurt" should surface
- * "Skyr yogurt dip" ahead of Indian items whose aliases include "yogurt" as
- * a translation for "dahi".
+ *   6 name_fuzzy         "pratha" → "Paratha"           (typo tolerance, edit-distance 1)
+ *   7 alias_fuzzy        "yourt" → food with alias "yogurt"
+ *   8 semantic           vector similarity (no substring/fuzzy match)
  */
 function classifyMatch(food, queryLower) {
   const nameLower = (food.name || '').toLowerCase();
@@ -101,7 +159,19 @@ async function searchFoods(req, res) {
       classified.push({ food, tier, label, confidence: null });
     }
 
-    // Semantic fallback only when substring match didn't give us enough candidates.
+    // Fuzzy tier — fires before semantic when substring path is thin.
+    // Cheaper than vector search (~10ms at 600 rows vs ~150ms for OpenAI
+    // embedding + Atlas vector query) and targets typo cases like
+    // "pratha" → "Paratha" that escape all substring tiers.
+    if (classified.length < SEMANTIC_FALLBACK_THRESHOLD) {
+      const fuzzyHits = await fuzzyCandidates(queryLower, seen);
+      for (const hit of fuzzyHits) {
+        seen.add(String(hit.food._id));
+        classified.push(hit);
+      }
+    }
+
+    // Semantic fallback only when substring + fuzzy didn't give us enough.
     // Vector search is ~100-200ms so we skip it on the fast path.
     if (classified.length < SEMANTIC_FALLBACK_THRESHOLD) {
       try {
@@ -122,7 +192,7 @@ async function searchFoods(req, res) {
             seen.add(id);
             classified.push({
               food: full,
-              tier: 6,
+              tier: 8,
               label: 'semantic',
               confidence: hit.confidence || 0
             });
@@ -135,10 +205,10 @@ async function searchFoods(req, res) {
     }
 
     // Tier ascending, then: semantic tier by vector confidence desc,
-    // substring tiers by usageCount desc.
+    // other tiers by usageCount desc.
     classified.sort((a, b) => {
       if (a.tier !== b.tier) return a.tier - b.tier;
-      if (a.tier === 6) return (b.confidence || 0) - (a.confidence || 0);
+      if (a.tier === 8) return (b.confidence || 0) - (a.confidence || 0);
       return (b.food.usageCount || 0) - (a.food.usageCount || 0);
     });
 
