@@ -1693,7 +1693,10 @@ async function cloneMeal(req, res) {
     const dateUtils = require('../utils/dateUtils');
     const nowIST = dateUtils.getCurrentDateTime();
 
-    // Generate new unique IDs for each item
+    // Generate new unique IDs for each item. Carry forward all source metadata
+    // (foodItemId, recipeId, nutritionSource, etc.) so cloned items still
+    // participate in the servingSizes refinement aggregation and preserve the
+    // original nutrition lineage.
     const clonedItems = originalMeal.items.map((item, index) => ({
       id: `item_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 5)}`,
       name: {
@@ -1726,7 +1729,14 @@ async function cloneMeal(req, res) {
         carbs:    { llm: item.nutrition?.carbs?.llm || null,    final: item.nutrition?.carbs?.final || null },
         fat:      { llm: item.nutrition?.fat?.llm || null,      final: item.nutrition?.fat?.final || null }
       },
-      confidence: item.confidence || null
+      confidence: item.confidence || null,
+      nutritionSource: item.nutritionSource || null,
+      foodItemId: item.foodItemId || null,
+      recipeId: item.recipeId || null,
+      dataSourcePriority: item.dataSourcePriority || null,
+      parentDish: item.parentDish || null,
+      componentType: item.componentType || null,
+      proteinForm: item.proteinForm || null
     }));
 
     // Create the cloned meal

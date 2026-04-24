@@ -499,9 +499,26 @@ async function calculateNutrition(items) {
       nutritionMap = batchResult.nutritionMap;
       tokenUsage.batchNutrition.input += batchResult.tokens.input || 0;
       tokenUsage.batchNutrition.output += batchResult.tokens.output || 0;
+    } catch (err) {
+      // Nutrition estimation failed — downstream per-item handler marks these
+      // as llm_error. Continue so the rest of the pipeline still runs.
+      console.error(`[Batch LLM Error]:`, err.message);
+    }
+
+    // Cache writes run separately so a cache failure doesn't mask the
+    // nutrition data we already computed. Cache failures are logged but the
+    // per-item handler still receives the nutrition map above.
+    try {
       cachedFoods = await cacheLLMResults(nutritionMap, dbMissItems);
     } catch (err) {
-      console.error(`[Batch LLM Error]:`, err.message);
+      const { reportError } = require('../utils/sentryReporter');
+      reportError(err, {
+        extra: {
+          context: 'nutritionLookupServiceV4:cacheLLMResults',
+          itemNames: dbMissItems.map(f => f.name)
+        }
+      });
+      console.error(`[Cache LLM Error] ${err.message} — nutrition resolved but FoodItem row not persisted; items will carry foodItemId=null`);
     }
   }
 
