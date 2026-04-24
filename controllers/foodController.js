@@ -13,21 +13,34 @@ function escapeRegex(s) {
 
 /**
  * Classify how a food matched the query so we can rank:
- *   1 name_prefix     "rot" → "Roti"
- *   2 alias_prefix    "rot" → "Chapati" (alias "roti")
- *   3 name_contains   "rot" → "Parotta"
- *   4 alias_contains  "rot" → food whose alias includes "...rot..."
- *   5 semantic        vector similarity (no substring match)
+ *   1 name_prefix        "rot" → "Roti"
+ *   2 name_word_prefix   "yogurt" → "Skyr yogurt dip" (query starts a word in the name)
+ *   3 alias_prefix       "rot" → "Chapati" (alias "roti")
+ *   4 name_contains      "rot" → "Parotta"
+ *   5 alias_contains     "rot" → food whose alias includes "...rot..."
+ *   6 semantic           vector similarity (no substring match)
+ *
+ * Rationale for name_word_prefix above alias_prefix: when the query word
+ * literally appears in a food's name (as a standalone word), that's a
+ * stronger signal than a synonym match via aliases. "yogurt" should surface
+ * "Skyr yogurt dip" ahead of Indian items whose aliases include "yogurt" as
+ * a translation for "dahi".
  */
 function classifyMatch(food, queryLower) {
   const nameLower = (food.name || '').toLowerCase();
   const aliases = (food.aliases || []).map(a => String(a).toLowerCase());
 
   if (nameLower.startsWith(queryLower)) return { tier: 1, label: 'name_prefix' };
-  if (aliases.some(a => a.startsWith(queryLower))) return { tier: 2, label: 'alias_prefix' };
-  if (nameLower.includes(queryLower)) return { tier: 3, label: 'name_contains' };
-  if (aliases.some(a => a.includes(queryLower))) return { tier: 4, label: 'alias_contains' };
-  return { tier: 5, label: 'semantic' };
+
+  const nameWords = nameLower.split(/[\s,()\-]+/).filter(Boolean);
+  if (nameWords.slice(1).some(w => w.startsWith(queryLower))) {
+    return { tier: 2, label: 'name_word_prefix' };
+  }
+
+  if (aliases.some(a => a.startsWith(queryLower))) return { tier: 3, label: 'alias_prefix' };
+  if (nameLower.includes(queryLower)) return { tier: 4, label: 'name_contains' };
+  if (aliases.some(a => a.includes(queryLower))) return { tier: 5, label: 'alias_contains' };
+  return { tier: 6, label: 'semantic' };
 }
 
 function projectFood(food, matchLabel) {
@@ -109,7 +122,7 @@ async function searchFoods(req, res) {
             seen.add(id);
             classified.push({
               food: full,
-              tier: 5,
+              tier: 6,
               label: 'semantic',
               confidence: hit.confidence || 0
             });
@@ -125,7 +138,7 @@ async function searchFoods(req, res) {
     // substring tiers by usageCount desc.
     classified.sort((a, b) => {
       if (a.tier !== b.tier) return a.tier - b.tier;
-      if (a.tier === 5) return (b.confidence || 0) - (a.confidence || 0);
+      if (a.tier === 6) return (b.confidence || 0) - (a.confidence || 0);
       return (b.food.usageCount || 0) - (a.food.usageCount || 0);
     });
 
