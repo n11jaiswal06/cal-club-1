@@ -710,7 +710,7 @@ function bulkEditItems(req, res) {
       console.log('📝 [BULK_EDIT] Processing item updates, count:', items.length);
 
       for (const itemUpdate of items) {
-        const { itemId, newQuantity, newMeasureQuantity, newItem, foodItemId, isMain } = itemUpdate;
+        const { itemId, newQuantity, newMeasureQuantity, newItem, newUnit, foodItemId, isMain } = itemUpdate;
 
         if (!itemId) {
           console.error('❌ [BULK_EDIT] Missing itemId in update request:', itemUpdate);
@@ -741,6 +741,7 @@ function bulkEditItems(req, res) {
           newQuantity,
           newMeasureQuantity,
           newItem: shouldTreatAsQuantityOnly ? undefined : newItem,
+          newUnit: typeof newUnit === 'string' && newUnit.trim() ? newUnit.trim() : null,
           foodItemId: foodItemId || null,
           isMain: typeof isMain === 'boolean' ? isMain : null,
           originalItem: item
@@ -765,7 +766,12 @@ function bulkEditItems(req, res) {
       const resolveTasks = [];
       for (const [itemId, update] of itemUpdates) {
         if (!update.newItem) continue;
-        const requestedUnit = update.originalItem.displayQuantity?.llm?.unit
+        // Prefer the unit the client explicitly sent with the edit (the unit
+        // the user saw in the modal after picking a new food). Falling back
+        // to the original item's unit is wrong when foodItemId changed — the
+        // old unit probably doesn't map to the new food's servingSizes.
+        const requestedUnit = update.newUnit
+          || update.originalItem.displayQuantity?.llm?.unit
           || update.originalItem.displayQuantity?.final?.unit
           || 'piece';
         const requestedValue = (update.newQuantity !== null && update.newQuantity !== undefined)
