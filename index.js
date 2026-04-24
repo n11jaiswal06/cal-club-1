@@ -16,6 +16,7 @@ const setupRoutes = require('./routes/index');
 const { connectToMongo } = require('./config/db');
 const { initializeMealReminderCron, getCurrentTimeIST } = require('./services/scheduledNotificationService');
 const { initializeHeroBriefCron } = require('./services/heroBriefCron');
+const { initializeFoodItemRefinementCron } = require('./services/foodItemRefinementCron');
 
 const PORT = process.env.PORT || 3000;
 const { reportError } = require('./utils/sentryReporter');
@@ -93,5 +94,6 @@ connectToMongo().then(() => {
     // Initialize cron jobs
     initializeMealReminderCron();
     initializeHeroBriefCron();
+    initializeFoodItemRefinementCron();
   });
 }); 
