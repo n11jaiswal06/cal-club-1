@@ -13,6 +13,7 @@ const notificationRoutes = require('./notificationRoutes');
 const { requireAccess } = require('../middleware/membership');
 const activityStoreRoutes = require('./activityStoreRoutes');
 const exerciseRoutes = require('./exerciseRoutes');
+const foodRoutes = require('./foodRoutes');
 
 function setupRoutes(req, res) {
   const url = req.url;
@@ -70,6 +71,11 @@ function setupRoutes(req, res) {
   // Meal routes
   if (url.startsWith('/meals')) {
     return requireAccess(req, res, () => mealRoutes(req, res));
+  }
+
+  // Food catalog routes (typeahead search over FoodItem)
+  if (url.startsWith('/foods')) {
+    return requireAccess(req, res, () => foodRoutes(req, res));
   }
 
   // Goal calculation routes
