@@ -24,6 +24,7 @@
  * Being right matters more than being lenient.
  */
 
+const mongoose = require('mongoose');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const FoodItem = require('../models/schemas/FoodItem');
 const { matchFood } = require('./foodMatcher');
@@ -130,6 +131,9 @@ Rules:
   grams = Math.round(grams);
 
   // Persist the new mapping so the next user doesn't pay this latency.
+  // Guard with a $ne match on the unit so concurrent resolvers of the same
+  // (food, unit) don't produce duplicate entries — second write becomes a
+  // no-op. Safe under Mongo's document-level atomicity for this update.
   try {
     const newEntry = {
       unit,
@@ -140,7 +144,7 @@ Rules:
       updatedAt: new Date()
     };
     await FoodItem.updateOne(
-      { _id: food._id },
+      { _id: food._id, 'servingSizes.unit': { $ne: unit } },
       { $push: { servingSizes: newEntry } }
     );
   } catch (cacheErr) {
@@ -164,7 +168,7 @@ Rules:
  * a FoodItem row. Mirrors the write-time enrichment path used by the V4
  * pipeline but scoped to a single item.
  */
-async function llmCreateFoodItem(name, category, observedDisplay) {
+async function llmCreateFoodItem(name, category) {
   const categoryHint = category || 'other';
   const prompt = `Estimate nutrition and common serving sizes for the food below.
 
@@ -222,25 +226,6 @@ Rules:
           updatedAt: new Date()
         }))
     : [];
-
-  // Seed from observed (unit, grams) if the user's submission adds a data point
-  // not already covered.
-  if (observedDisplay && observedDisplay.unit && observedDisplay.value && observedDisplay.grams) {
-    const unit = observedDisplay.unit;
-    if (!isExcludedServingUnit(unit) && !findServingSize(servingSizes, unit)) {
-      const grams = Math.round(observedDisplay.grams / observedDisplay.value);
-      if (grams > 0) {
-        servingSizes.push({
-          unit,
-          grams,
-          isDefault: servingSizes.length === 0,
-          source: 'aggregated',
-          sampleSize: 1,
-          updatedAt: new Date()
-        });
-      }
-    }
-  }
 
   // Best-effort embedding for future semantic matches.
   let embedding = null;
@@ -312,7 +297,13 @@ async function resolveItem({ foodItemId, name, displayQuantity, category }) {
 
   // Case A: caller pinned a FoodItem.
   if (foodItemId) {
-    const food = await FoodItem.findById(foodItemId).lean(false);
+    if (!mongoose.Types.ObjectId.isValid(foodItemId)) {
+      throw new ResolverError(
+        `Invalid foodItemId: ${foodItemId}`,
+        'INVALID_INPUT'
+      );
+    }
+    const food = await FoodItem.findById(foodItemId);
     if (!food) {
       throw new ResolverError(`FoodItem ${foodItemId} not found.`, 'FOOD_ITEM_NOT_FOUND');
     }
@@ -334,19 +325,13 @@ async function resolveItem({ foodItemId, name, displayQuantity, category }) {
     });
   }
 
-  // Case C: no match — LLM-create and resolve against the new row.
-  const unit = displayQuantity.unit;
-  const unitIsMeasure = isExcludedServingUnit(unit);
-  const unitNormalized = unit.trim().toLowerCase();
-  const isMl = unitNormalized === 'ml' || unitNormalized === 'milliliter' || unitNormalized === 'milliliters';
-  const observedGrams = unitIsMeasure
-    ? (isMl ? mlToGrams(displayQuantity.value, name) : displayQuantity.value)
-    : null;
-  const observed = unitIsMeasure && observedGrams
-    ? { unit: null, value: null, grams: null } // measure unit gives us grams directly — no serving seed possible
-    : null;
-
-  const newFood = await llmCreateFoodItem(name.trim(), category, observed);
+  // Case C: no match — LLM-create and resolve against the new row. The LLM
+  // returns 2-4 servingSizes covering common units; if the user's unit isn't
+  // among them, resolveAgainstFood will trigger a unit-level resolve (case B
+  // machinery) against the new food. Seeding from the user's observation is
+  // infeasible here because we'd need grams to seed a serving, and grams for
+  // a non-measure unit is exactly what we're trying to resolve.
+  const newFood = await llmCreateFoodItem(name.trim(), category);
   return resolveAgainstFood({ food: newFood, displayQuantity, sourceOverride: 'llm_fresh' });
 }
 

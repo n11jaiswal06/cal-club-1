@@ -8,6 +8,24 @@ const MealImpactService = require('../services/mealImpactService');
 const { reportError } = require('../utils/sentryReporter');
 const { resolveItem, ResolverError } = require('../services/foodItemResolver');
 
+// Map a ResolverError code to an HTTP status for the add/edit handlers.
+// INVALID_INPUT → 400 (client-side bug, retry won't help)
+// FOOD_ITEM_NOT_FOUND → 404 (stale foodItemId from client)
+// UNIT_RESOLUTION_FAILED / NUTRITION_LOOKUP_FAILED → 503 (Gemini-side failure,
+// retry likely to succeed — modal shows retry UI).
+function statusForResolverCode(code) {
+  switch (code) {
+    case 'INVALID_INPUT':
+      return 400;
+    case 'FOOD_ITEM_NOT_FOUND':
+      return 404;
+    case 'UNIT_RESOLUTION_FAILED':
+    case 'NUTRITION_LOOKUP_FAILED':
+    default:
+      return 503;
+  }
+}
+
 /**
  * Helper function to create a snapshot of meal state for audit
  */
@@ -777,7 +795,8 @@ function bulkEditItems(req, res) {
       } catch (err) {
         if (err instanceof ResolverError) {
           reportError(err, { req, extra: { context: 'bulkEditItems:resolveItem', code: err.code } });
-          res.writeHead(503, { 'Content-Type': 'application/json' });
+          const status = statusForResolverCode(err.code);
+          res.writeHead(status, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: err.message, code: err.code }));
           return;
         }
@@ -1203,7 +1222,8 @@ async function addItemToMeal(req, res) {
 
       const changes = [];
       const requestedDisplayQuantity = data.displayQuantity || data.quantity || { value: 1, unit: 'piece' };
-      const isMain = !!data.isMain;
+      // Tri-state: preserve null (client didn't specify) vs explicit true/false.
+      const isMain = typeof data.isMain === 'boolean' ? data.isMain : null;
 
       // Resolve the item via the DB-first pipeline. Accepts optional foodItemId
       // from typeahead; falls back to matcher + LLM when absent. Throws
@@ -1223,7 +1243,8 @@ async function addItemToMeal(req, res) {
       } catch (err) {
         if (err instanceof ResolverError) {
           reportError(err, { req, extra: { context: 'addItemToMeal:resolveItem', code: err.code, name: data.name, foodItemId: data.foodItemId } });
-          res.writeHead(503, { 'Content-Type': 'application/json' });
+          const status = statusForResolverCode(err.code);
+          res.writeHead(status, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: err.message, code: err.code }));
           return;
         }
