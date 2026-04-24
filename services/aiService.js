@@ -750,22 +750,25 @@ Return only valid JSON, no additional text.`;
         const nut = item.nutrition || {};
         const dq = item.displayQuantity || {};
         const mq = item.measureQuantity || {};
+        const dqValue = dq.value || 1;
+        const dqUnit = dq.unit || 'piece';
+        const mqValue = item.grams || mq.value || null;
+        const mqUnit = mq.unit || 'g';
+        // Mirror llm → final at save time. Readers across the codebase already
+        // fall back final → llm (see mealFormatter.formatItem), so this is
+        // backwards-compatible. Populating final enables Meal.items[] to feed
+        // the servingSizes refinement cron without the ~98% coverage gap that
+        // the "final=null until user edits" convention caused.
         return {
           id: `item_${Date.now()}_${index}`,
-          name: { llm: item.name, final: null },
+          name: { llm: item.name, final: item.name },
           displayQuantity: {
-            llm: {
-              value: dq.value || 1,
-              unit: dq.unit || 'piece'
-            },
-            final: null
+            llm: { value: dqValue, unit: dqUnit },
+            final: { value: dqValue, unit: dqUnit }
           },
           measureQuantity: {
-            llm: {
-              value: item.grams || mq.value || null,
-              unit: mq.unit || 'g'
-            },
-            final: null
+            llm: { value: mqValue, unit: mqUnit },
+            final: { value: mqValue, unit: mqUnit }
           },
           nutrition: {
             calories: { llm: nut.calories || 0, final: nut.calories || 0 },

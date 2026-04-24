@@ -6,6 +6,25 @@ const mealFormatter = require('../utils/mealFormatter');
 const AiService = require('../services/aiService');
 const MealImpactService = require('../services/mealImpactService');
 const { reportError } = require('../utils/sentryReporter');
+const { resolveItem, ResolverError } = require('../services/foodItemResolver');
+
+// Map a ResolverError code to an HTTP status for the add/edit handlers.
+// INVALID_INPUT → 400 (client-side bug, retry won't help)
+// FOOD_ITEM_NOT_FOUND → 404 (stale foodItemId from client)
+// UNIT_RESOLUTION_FAILED / NUTRITION_LOOKUP_FAILED → 503 (Gemini-side failure,
+// retry likely to succeed — modal shows retry UI).
+function statusForResolverCode(code) {
+  switch (code) {
+    case 'INVALID_INPUT':
+      return 400;
+    case 'FOOD_ITEM_NOT_FOUND':
+      return 404;
+    case 'UNIT_RESOLUTION_FAILED':
+    case 'NUTRITION_LOOKUP_FAILED':
+    default:
+      return 503;
+  }
+}
 
 /**
  * Helper function to create a snapshot of meal state for audit
@@ -681,27 +700,17 @@ function bulkEditItems(req, res) {
       const mealSnapshotBefore = createMealSnapshot(meal);
       console.log('📝 [BULK_EDIT] Captured meal snapshot before changes');
 
-      // TODO: Frontend workaround - Remove this flag when frontend correctly omits newItem for quantity-only updates
-      // When true: If newItem equals old item name, treat as quantity-only update (skip LLM call)
-      // When false: Normal behavior - newItem always triggers LLM call
+      // Frontend may send newItem equal to the current name to indicate a
+      // quantity-only edit. Normalize that here so we don't re-resolve the item.
       const TREAT_SAME_ITEM_AS_QUANTITY_ONLY = true;
 
-      // Track changes for audit
       const changes = [];
-      let llmInput = null;
-      let llmOutput = null;
-
-      // Prepare items for batch AI call
-      const batchItems = [];
-      const itemUpdates = new Map(); // Map itemId to update data
-      let hasMainItemChange = false;
-      let mainItemInfo = null;
+      const itemUpdates = new Map(); // itemId → pending update
 
       console.log('📝 [BULK_EDIT] Processing item updates, count:', items.length);
 
-      // Process each item update request
       for (const itemUpdate of items) {
-        const { itemId, newQuantity, newMeasureQuantity, newItem } = itemUpdate;
+        const { itemId, newQuantity, newMeasureQuantity, newItem, foodItemId, isMain } = itemUpdate;
 
         if (!itemId) {
           console.error('❌ [BULK_EDIT] Missing itemId in update request:', itemUpdate);
@@ -710,7 +719,6 @@ function bulkEditItems(req, res) {
           return;
         }
 
-        // Find the item in the meal
         const itemIndex = meal.items.findIndex(item => item.id === itemId);
         if (itemIndex === -1) {
           console.error('❌ [BULK_EDIT] Item not found in meal:', { itemId, mealId });
@@ -721,203 +729,147 @@ function bulkEditItems(req, res) {
 
         const item = meal.items[itemIndex];
         const currentItemName = item.name?.llm || item.name?.final || '';
-        
-        // Frontend workaround: Check if newItem is same as current item name
+
         let shouldTreatAsQuantityOnly = false;
         if (TREAT_SAME_ITEM_AS_QUANTITY_ONLY && newItem) {
-          const normalizedNewItem = newItem.trim().toLowerCase();
-          const normalizedCurrentName = currentItemName.trim().toLowerCase();
-          shouldTreatAsQuantityOnly = normalizedNewItem === normalizedCurrentName;
-          
-          if (shouldTreatAsQuantityOnly) {
-            console.log('⚠️ [BULK_EDIT] Frontend workaround: newItem matches current name, treating as quantity-only update:', {
-              itemId,
-              currentName: currentItemName,
-              newItem,
-              reason: 'Frontend sending same item name for quantity-only updates'
-            });
-          }
+          shouldTreatAsQuantityOnly =
+            newItem.trim().toLowerCase() === currentItemName.trim().toLowerCase();
         }
 
-        // Store the update data (keep newItem in map for consistency, but we'll skip AI call if it's same)
         itemUpdates.set(itemId, {
           itemIndex,
           newQuantity,
           newMeasureQuantity,
-          newItem: shouldTreatAsQuantityOnly ? undefined : newItem, // Clear newItem if treating as quantity-only
+          newItem: shouldTreatAsQuantityOnly ? undefined : newItem,
+          foodItemId: foodItemId || null,
+          isMain: typeof isMain === 'boolean' ? isMain : null,
           originalItem: item
         });
 
         console.log('📝 [BULK_EDIT] Processing item update:', {
           itemId,
           currentName: currentItemName,
-          currentDisplayQuantity: item.displayQuantity?.llm?.value || item.displayQuantity?.final?.value,
           newItem,
           newQuantity,
+          hasFoodItemId: !!foodItemId,
+          isMain,
           treatingAsQuantityOnly: shouldTreatAsQuantityOnly
         });
-
-        // Only add to batch if newItem is provided AND it's actually different (name change)
-        if (newItem && !shouldTreatAsQuantityOnly) {
-          const isMainItem = isMainFoodItem(item.name.llm);
-          
-          batchItems.push({
-            originalName: item.name.llm,
-            newName: newItem,
-            newQuantity: newQuantity !== null && newQuantity !== undefined ? newQuantity : item.displayQuantity.llm.value,
-            unit: item.displayQuantity.llm.unit,
-            isMainItem
-          });
-
-          console.log('📝 [BULK_EDIT] Added to batch AI call:', {
-            originalName: item.name.llm,
-            newName: newItem,
-            isMainItem
-          });
-
-          if (isMainItem) {
-            hasMainItemChange = true;
-            mainItemInfo = {
-              originalName: item.name.llm,
-              newName: newItem
-            };
-            console.log('📝 [BULK_EDIT] Main item change detected:', mainItemInfo);
-          }
-        } else if (shouldTreatAsQuantityOnly) {
-          console.log('📝 [BULK_EDIT] Skipping AI call - same item name detected (quantity-only update)');
-        }
       }
 
-      console.log('📝 [BULK_EDIT] Batch processing summary:', {
-        totalItemsToUpdate: itemUpdates.size,
-        itemsRequiringAI: batchItems.length,
-        hasMainItemChange,
-        batchItems: batchItems.map(bi => ({
-          originalName: bi.originalName,
-          newName: bi.newName,
-          isMainItem: bi.isMainItem
-        }))
-      });
+      // Resolve each name-change item via DB-first waterfall. Runs in parallel
+      // because the resolver writes are item-scoped and don't conflict. If any
+      // single resolution fails (unit unresolvable, LLM error), we surface it
+      // to the client as 503 with the specific code so the modal can prompt a
+      // retry — no silent fallback.
+      const resolveTasks = [];
+      for (const [itemId, update] of itemUpdates) {
+        if (!update.newItem) continue;
+        const requestedUnit = update.originalItem.displayQuantity?.llm?.unit
+          || update.originalItem.displayQuantity?.final?.unit
+          || 'piece';
+        const requestedValue = (update.newQuantity !== null && update.newQuantity !== undefined)
+          ? update.newQuantity
+          : (update.originalItem.displayQuantity?.llm?.value
+            || update.originalItem.displayQuantity?.final?.value
+            || 1);
 
-      // Make single AI call if there are any item name changes
-      let aiResult = null;
-      if (batchItems.length > 0) {
-        console.log('🤖 [BULK_EDIT] Calling AI service for batch update:', {
-          itemsCount: batchItems.length,
-          currentMealName: meal.name,
-          shouldUpdateMealName: hasMainItemChange,
-          mainItemInfo
-        });
-        
-        const aiCallStartTime = Date.now();
-        aiResult = await AiService.batchUpdateFoodItems(
-          batchItems,
-          meal.name,
-          hasMainItemChange,
-          mainItemInfo
+        resolveTasks.push(
+          (async () => {
+            const resolved = await resolveItem({
+              foodItemId: update.foodItemId || null,
+              name: update.newItem,
+              displayQuantity: { value: Number(requestedValue), unit: requestedUnit }
+            });
+            return { itemId, resolved };
+          })()
         );
-        const aiCallDuration = Date.now() - aiCallStartTime;
+      }
 
-        console.log('✅ [BULK_EDIT] AI service response received:', {
-          durationMs: aiCallDuration,
-          itemsReturned: aiResult?.items?.length || 0,
-          mealNameChanged: aiResult?.mealNameChanged || false,
-          newMealName: aiResult?.mealName,
-          hasAuditData: !!aiResult?.auditData,
-          tokensUsed: aiResult?.auditData?.tokensUsed,
-          latencyMs: aiResult?.auditData?.latencyMs
-        });
-
-        // Store LLM input/output for audit
-        if (aiResult.auditData) {
-          llmInput = {
-            requestPayload: { 
-              items: batchItems, 
-              currentMealName: meal.name, 
-              shouldUpdateMealName: hasMainItemChange,
-              mainItemInfo: mainItemInfo
-            },
-            promptSent: aiResult.auditData.promptSent,
-            provider: aiResult.auditData.provider,
-            model: aiResult.auditData.model
-          };
-          llmOutput = {
-            rawResponse: aiResult.auditData.rawResponse,
-            parsedResponse: aiResult.auditData.parsedResponse,
-            tokensUsed: aiResult.auditData.tokensUsed,
-            latencyMs: aiResult.auditData.latencyMs
-          };
+      let resolvedByItemId = new Map();
+      try {
+        const settled = await Promise.all(resolveTasks);
+        for (const { itemId, resolved } of settled) {
+          resolvedByItemId.set(itemId, resolved);
         }
-      } else {
-        console.log('📝 [BULK_EDIT] Skipping AI call - no item name changes, only quantity updates');
+      } catch (err) {
+        if (err instanceof ResolverError) {
+          reportError(err, { req, extra: { context: 'bulkEditItems:resolveItem', code: err.code } });
+          const status = statusForResolverCode(err.code);
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message, code: err.code }));
+          return;
+        }
+        throw err;
       }
 
       // Apply updates to each item and track changes
       console.log('📝 [BULK_EDIT] Applying updates to items, total:', itemUpdates.size);
-      let aiItemIndex = 0;
       for (const [itemId, updateData] of itemUpdates) {
-        const { itemIndex, newQuantity, newMeasureQuantity, newItem, originalItem } = updateData;
+        const { itemIndex, newQuantity, newMeasureQuantity, newItem, isMain: isMainFlag } = updateData;
         const item = meal.items[itemIndex];
 
-        if (newItem && aiResult) {
-          // Case: Item name changed - use AI result
-          const aiItem = aiResult.items[aiItemIndex];
-          console.log('📝 [BULK_EDIT] Applying AI result to item:', {
-            itemId,
-            aiItemIndex,
-            originalName: item.name.llm,
-            newName: aiItem.name,
-            aiNutrition: aiItem.nutrition
-          });
-          aiItemIndex++;
+        // Propagate the isMain flag if provided (null means "leave unchanged").
+        if (isMainFlag !== null && isMainFlag !== undefined) {
+          item.isMain = isMainFlag;
+        }
 
-          // Track name change - use user-provided name
+        if (newItem) {
+          // Case: item changed — apply resolver output.
+          const resolved = resolvedByItemId.get(itemId);
+          if (!resolved) {
+            // Shouldn't happen (we collected all resolve tasks above), but guard.
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `Internal: missing resolver result for ${itemId}` }));
+            return;
+          }
+
           changes.push({
-            itemId: itemId,
+            itemId,
             field: 'name',
             previousValue: item.name.final || item.name.llm,
-            newValue: newItem
+            newValue: resolved.name
           });
 
-          // Determine the quantity value to use
-          const quantityValue = newQuantity !== null && newQuantity !== undefined 
-            ? newQuantity 
-            : aiItem.quantity.value;
-
-          const quantityUnit = newQuantity !== null && newQuantity !== undefined
-            ? item.displayQuantity.llm.unit
-            : aiItem.quantity.unit;
-
-          // Track quantity change if provided
           if (newQuantity !== null && newQuantity !== undefined) {
             changes.push({
-              itemId: itemId,
+              itemId,
               field: 'displayQuantity',
               previousValue: item.displayQuantity.final?.value || item.displayQuantity.llm?.value,
               newValue: newQuantity
             });
           }
 
-          // Update item name - use user-provided name, not AI suggestion
-          item.name.final = newItem;
-          item.displayQuantity.final = {
-            value: quantityValue,
-            unit: quantityUnit
-          };
+          // Apply name, displayQuantity, measureQuantity, nutrition, and source
+          // metadata from the resolver. Mirror to both .llm and .final so Meal
+          // data keeps feeding the refinement cron.
+          item.name.llm = resolved.name;
+          item.name.final = resolved.name;
+          item.displayQuantity.llm = { value: resolved.displayQuantity.value, unit: resolved.displayQuantity.unit };
+          item.displayQuantity.final = { value: resolved.displayQuantity.value, unit: resolved.displayQuantity.unit };
+          if (!item.measureQuantity) item.measureQuantity = { llm: null, final: null };
+          item.measureQuantity.llm = { value: resolved.measureQuantity.value, unit: resolved.measureQuantity.unit };
+          item.measureQuantity.final = { value: resolved.measureQuantity.value, unit: resolved.measureQuantity.unit };
 
-          // Track nutrition changes from AI
           changes.push(
-            { itemId, field: 'calories', previousValue: item.nutrition.calories.final || item.nutrition.calories.llm, newValue: aiItem.nutrition.calories },
-            { itemId, field: 'protein', previousValue: item.nutrition.protein.final || item.nutrition.protein.llm, newValue: aiItem.nutrition.protein },
-            { itemId, field: 'carbs', previousValue: item.nutrition.carbs.final || item.nutrition.carbs.llm, newValue: aiItem.nutrition.carbs },
-            { itemId, field: 'fat', previousValue: item.nutrition.fat.final || item.nutrition.fat.llm, newValue: aiItem.nutrition.fat }
+            { itemId, field: 'calories', previousValue: item.nutrition.calories.final || item.nutrition.calories.llm, newValue: resolved.nutrition.calories },
+            { itemId, field: 'protein',  previousValue: item.nutrition.protein.final  || item.nutrition.protein.llm,  newValue: resolved.nutrition.protein },
+            { itemId, field: 'carbs',    previousValue: item.nutrition.carbs.final    || item.nutrition.carbs.llm,    newValue: resolved.nutrition.carbs },
+            { itemId, field: 'fat',      previousValue: item.nutrition.fat.final      || item.nutrition.fat.llm,      newValue: resolved.nutrition.fat }
           );
 
-          // Update nutrition from AI
-          item.nutrition.calories.final = aiItem.nutrition.calories;
-          item.nutrition.protein.final = aiItem.nutrition.protein;
-          item.nutrition.carbs.final = aiItem.nutrition.carbs;
-          item.nutrition.fat.final = aiItem.nutrition.fat;
+          item.nutrition.calories.llm = resolved.nutrition.calories;
+          item.nutrition.calories.final = resolved.nutrition.calories;
+          item.nutrition.protein.llm = resolved.nutrition.protein;
+          item.nutrition.protein.final = resolved.nutrition.protein;
+          item.nutrition.carbs.llm = resolved.nutrition.carbs;
+          item.nutrition.carbs.final = resolved.nutrition.carbs;
+          item.nutrition.fat.llm = resolved.nutrition.fat;
+          item.nutrition.fat.final = resolved.nutrition.fat;
+
+          item.nutritionSource = resolved.nutritionSource;
+          item.foodItemId = resolved.foodItemId || null;
+          item.confidence = resolved.confidence;
 
         } else if (!newItem && (newQuantity !== null && newQuantity !== undefined) && !(newMeasureQuantity !== null && newMeasureQuantity !== undefined)) {
           // Case: Only displayQuantity changed - calculate proportionally
@@ -1016,20 +968,9 @@ function bulkEditItems(req, res) {
         }
       }
 
-      // Update meal name if AI changed it
-      if (aiResult && aiResult.mealNameChanged && aiResult.mealName !== meal.name) {
-        console.log('📝 [BULK_EDIT] Updating meal name:', {
-          previousName: meal.name,
-          newName: aiResult.mealName
-        });
-        changes.push({
-          // itemId omitted for meal-level changes
-          field: 'mealName',
-          previousValue: meal.name,
-          newValue: aiResult.mealName
-        });
-        meal.name = aiResult.mealName;
-      }
+      // Meal rename on main-item change is out of scope for Stage 3.
+      // Users can rename manually; future work (if needed) can layer an async
+      // title-regen call on top.
 
       // Recompute total nutrition
       console.log('📝 [BULK_EDIT] Recomputing total nutrition');
@@ -1047,11 +988,12 @@ function bulkEditItems(req, res) {
       const mealSnapshotAfter = createMealSnapshot(updatedMeal);
       console.log('📝 [BULK_EDIT] Captured meal snapshot after changes');
 
-      // Create audit entry (non-blocking)
+      // Create audit entry (non-blocking). LLM audit payload is no longer
+      // captured here — resolver failures log to Sentry on the error path.
       console.log('📝 [BULK_EDIT] Creating audit entry:', {
         changesCount: changes.length,
-        hasLlmInput: !!llmInput,
-        hasLlmOutput: !!llmOutput
+        itemsResolvedViaLLM: Array.from(resolvedByItemId.values())
+          .filter(r => r.nutritionSource === 'llm_fresh' || r.nutritionSource === 'llm_cached').length
       });
       MealEditAudit.create({
         mealId: mealId,
@@ -1062,8 +1004,14 @@ function bulkEditItems(req, res) {
           before: mealSnapshotBefore,
           after: mealSnapshotAfter
         },
-        llmInput: llmInput,
-        llmOutput: llmOutput,
+        llmInput: null,
+        llmOutput: {
+          resolvedItems: Array.from(resolvedByItemId.entries()).map(([id, r]) => ({
+            itemId: id,
+            foodItemId: r.foodItemId || null,
+            nutritionSource: r.nutritionSource
+          }))
+        },
         status: 'success'
       }).catch(err => console.error('❌ [BULK_EDIT] Failed to create audit entry:', err));
 
@@ -1095,18 +1043,6 @@ function bulkEditItems(req, res) {
       res.end(JSON.stringify({ error: 'Failed to bulk edit items', details: error.message }));
     }
   });
-}
-
-// Helper function to determine if an item is a main food item
-function isMainFoodItem(itemName) {
-  const mainKeywords = [
-    'chicken', 'paneer', 'fish', 'mutton', 'egg', 'tofu', 'dal', 'lentil',
-    'rice', 'roti', 'naan', 'paratha', 'bread', 'pasta', 'noodles', 'biryani',
-    'curry', 'sabzi', 'gravy', 'meat', 'beef', 'pork', 'lamb', 'prawn', 'shrimp'
-  ];
-  
-  const lowerItemName = itemName.toLowerCase();
-  return mainKeywords.some(keyword => lowerItemName.includes(keyword));
 }
 
 /**
@@ -1284,148 +1220,69 @@ async function addItemToMeal(req, res) {
       // Generate a unique ID for the new item
       const newItemId = `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-      // Track changes and LLM data for audit
       const changes = [];
-      let llmInput = null;
-      let llmOutput = null;
-      let itemName = data.name;
-      let displayQuantity = data.displayQuantity || data.quantity || { value: 1, unit: 'piece' };
-      let nutrition = data.nutrition;
-      let updatedMealName = meal.name;
+      const requestedDisplayQuantity = data.displayQuantity || data.quantity || { value: 1, unit: 'piece' };
+      // Tri-state: preserve null (client didn't specify) vs explicit true/false.
+      const isMain = typeof data.isMain === 'boolean' ? data.isMain : null;
 
-      // If nutrition is not provided, call Gemini to get it
-      if (!nutrition) {
-        try {
-          // Determine the unit to use for AI call
-          const originalUnit = displayQuantity.unit || 'piece';
-
-          // Call AI service to get nutrition information
-          const aiResult = await getNutritionForItem(data.name, meal.name, null, originalUnit);
-
-          // Use AI-provided nutrition and quantity if not provided
-          nutrition = aiResult.nutrition;
-          if (!data.displayQuantity && !data.quantity) {
-            displayQuantity = aiResult.quantity;
-          } else {
-            // Use provided quantity but keep AI's unit if quantity unit not provided
-            displayQuantity = {
-              value: displayQuantity.value || aiResult.quantity.value,
-              unit: displayQuantity.unit || aiResult.quantity.unit
-            };
+      // Resolve the item via the DB-first pipeline. Accepts optional foodItemId
+      // from typeahead; falls back to matcher + LLM when absent. Throws
+      // ResolverError on unresolvable unit or LLM failure — surfaced to the
+      // client as 503 so the modal can prompt a retry.
+      let resolved;
+      try {
+        resolved = await resolveItem({
+          foodItemId: data.foodItemId || null,
+          name: data.name,
+          category: data.category || null,
+          displayQuantity: {
+            value: Number(requestedDisplayQuantity.value) || 1,
+            unit: requestedDisplayQuantity.unit || 'piece'
           }
-          
-          // Update item name if AI provided a better one
-          itemName = aiResult.name || data.name;
-          
-          // Update meal name if AI suggests a better one
-          if (aiResult.updatedMealName) {
-            updatedMealName = aiResult.updatedMealName;
-            changes.push({
-              itemId: newItemId,
-              field: 'mealName',
-              previousValue: meal.name,
-              newValue: updatedMealName
-            });
-          }
-
-          // Store LLM input/output for audit
-          if (aiResult.auditData) {
-            llmInput = {
-              requestPayload: {
-                itemName: data.name,
-                currentMealName: meal.name,
-                displayQuantity: displayQuantity
-              },
-              promptSent: aiResult.auditData.promptSent,
-              provider: aiResult.auditData.provider,
-              model: aiResult.auditData.model
-            };
-            llmOutput = {
-              rawResponse: aiResult.auditData.rawResponse,
-              parsedResponse: aiResult.auditData.parsedResponse,
-              tokensUsed: aiResult.auditData.tokensUsed,
-              latencyMs: aiResult.auditData.latencyMs
-            };
-          }
-
-          // Track nutrition changes from AI
-          changes.push(
-            { itemId: newItemId, field: 'calories', previousValue: null, newValue: nutrition.calories },
-            { itemId: newItemId, field: 'protein', previousValue: null, newValue: nutrition.protein },
-            { itemId: newItemId, field: 'carbs', previousValue: null, newValue: nutrition.carbs },
-            { itemId: newItemId, field: 'fat', previousValue: null, newValue: nutrition.fat }
-          );
-        } catch (aiError) {
-          reportError(aiError, { req, extra: { context: 'addItemToMeal_AI_nutrition', itemName: data.name } });
-          console.error('Error getting AI nutrition:', aiError);
-          // Fallback to default nutrition values if AI fails
-          nutrition = {
-            calories: 100,
-            protein: 5,
-            carbs: 15,
-            fat: 3
-          };
+        });
+      } catch (err) {
+        if (err instanceof ResolverError) {
+          reportError(err, { req, extra: { context: 'addItemToMeal:resolveItem', code: err.code, name: data.name, foodItemId: data.foodItemId } });
+          const status = statusForResolverCode(err.code);
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message, code: err.code }));
+          return;
         }
-      } else {
-        // Nutrition was provided, track the change
-        changes.push(
-          { itemId: newItemId, field: 'calories', previousValue: null, newValue: nutrition.calories || 0 },
-          { itemId: newItemId, field: 'protein', previousValue: null, newValue: nutrition.protein || 0 },
-          { itemId: newItemId, field: 'carbs', previousValue: null, newValue: nutrition.carbs || 0 },
-          { itemId: newItemId, field: 'fat', previousValue: null, newValue: nutrition.fat || 0 }
-        );
+        throw err;
       }
 
-      // Track name change
-      changes.push({
-        itemId: newItemId,
-        field: 'name',
-        previousValue: null,
-        newValue: itemName
-      });
+      changes.push(
+        { itemId: newItemId, field: 'name', previousValue: null, newValue: resolved.name },
+        { itemId: newItemId, field: 'calories', previousValue: null, newValue: resolved.nutrition.calories },
+        { itemId: newItemId, field: 'protein', previousValue: null, newValue: resolved.nutrition.protein },
+        { itemId: newItemId, field: 'carbs', previousValue: null, newValue: resolved.nutrition.carbs },
+        { itemId: newItemId, field: 'fat', previousValue: null, newValue: resolved.nutrition.fat }
+      );
 
-      // Create the new item
+      // Build the new meal item — populated both .llm and .final so Meal data
+      // can feed the servingSizes refinement cron (no "final=null" gap).
       const newItem = {
         id: newItemId,
-        name: {
-          llm: itemName,
-          final: itemName
-        },
+        name: { llm: resolved.name, final: resolved.name },
         displayQuantity: {
-          llm: {
-            value: displayQuantity.value,
-            unit: displayQuantity.unit
-          },
-          final: {
-            value: displayQuantity.value,
-            unit: displayQuantity.unit
-          }
+          llm: { value: resolved.displayQuantity.value, unit: resolved.displayQuantity.unit },
+          final: { value: resolved.displayQuantity.value, unit: resolved.displayQuantity.unit }
+        },
+        measureQuantity: {
+          llm: { value: resolved.measureQuantity.value, unit: resolved.measureQuantity.unit },
+          final: { value: resolved.measureQuantity.value, unit: resolved.measureQuantity.unit }
         },
         nutrition: {
-          calories: {
-            llm: nutrition.calories || 0,
-            final: nutrition.calories || 0
-          },
-          protein: {
-            llm: nutrition.protein || 0,
-            final: nutrition.protein || 0
-          },
-          carbs: {
-            llm: nutrition.carbs || 0,
-            final: nutrition.carbs || 0
-          },
-          fat: {
-            llm: nutrition.fat || 0,
-            final: nutrition.fat || 0
-          }
+          calories: { llm: resolved.nutrition.calories, final: resolved.nutrition.calories },
+          protein:  { llm: resolved.nutrition.protein,  final: resolved.nutrition.protein },
+          carbs:    { llm: resolved.nutrition.carbs,    final: resolved.nutrition.carbs },
+          fat:      { llm: resolved.nutrition.fat,      final: resolved.nutrition.fat }
         },
-        confidence: data.confidence || null
+        confidence: resolved.confidence,
+        nutritionSource: resolved.nutritionSource,
+        foodItemId: resolved.foodItemId || null,
+        isMain
       };
-
-      // Update meal name if AI suggested a change
-      if (updatedMealName !== meal.name) {
-        meal.name = updatedMealName;
-      }
 
       // Add item to meal
       meal.items.push(newItem);
@@ -1437,7 +1294,9 @@ async function addItemToMeal(req, res) {
       // Capture meal state AFTER changes for audit
       const mealSnapshotAfter = createMealSnapshot(updatedMeal);
 
-      // Create audit entry (non-blocking)
+      // Create audit entry (non-blocking). LLM input/output is no longer
+      // captured per-add — resolver-level calls are logged via Sentry when
+      // they fail. Add a lightweight marker of the resolution source instead.
       MealEditAudit.create({
         mealId: mealId,
         userId: userId,
@@ -1447,8 +1306,11 @@ async function addItemToMeal(req, res) {
           before: mealSnapshotBefore,
           after: mealSnapshotAfter
         },
-        llmInput: llmInput,
-        llmOutput: llmOutput,
+        llmInput: null,
+        llmOutput: {
+          nutritionSource: resolved.nutritionSource,
+          foodItemId: resolved.foodItemId || null
+        },
         status: 'success'
       }).catch(err => console.error('Failed to create audit entry:', err));
 
@@ -1693,7 +1555,10 @@ async function cloneMeal(req, res) {
     const dateUtils = require('../utils/dateUtils');
     const nowIST = dateUtils.getCurrentDateTime();
 
-    // Generate new unique IDs for each item
+    // Generate new unique IDs for each item. Carry forward all source metadata
+    // (foodItemId, recipeId, nutritionSource, etc.) so cloned items still
+    // participate in the servingSizes refinement aggregation and preserve the
+    // original nutrition lineage.
     const clonedItems = originalMeal.items.map((item, index) => ({
       id: `item_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 5)}`,
       name: {
@@ -1726,7 +1591,14 @@ async function cloneMeal(req, res) {
         carbs:    { llm: item.nutrition?.carbs?.llm || null,    final: item.nutrition?.carbs?.final || null },
         fat:      { llm: item.nutrition?.fat?.llm || null,      final: item.nutrition?.fat?.final || null }
       },
-      confidence: item.confidence || null
+      confidence: item.confidence || null,
+      nutritionSource: item.nutritionSource || null,
+      foodItemId: item.foodItemId || null,
+      recipeId: item.recipeId || null,
+      dataSourcePriority: item.dataSourcePriority || null,
+      parentDish: item.parentDish || null,
+      componentType: item.componentType || null,
+      proteinForm: item.proteinForm || null
     }));
 
     // Create the cloned meal
