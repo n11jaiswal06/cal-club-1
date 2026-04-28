@@ -41,34 +41,61 @@ class RevenueCatService {
    * Check whether a user has an active entitlement.
    * @param {string} appUserId
    * @param {string} [entitlementId] - defaults to PREMIUM_ENTITLEMENT_ID
-   * @returns {Promise<{active: boolean, isInTrial: boolean, expiresDate: string|null, productIdentifier: string|null}>}
+   * @returns {Promise<{active: boolean, isInTrial: boolean, expiresDate: string|null, productIdentifier: string|null, willRenew: boolean}>}
    */
   static async hasActiveEntitlement(appUserId, entitlementId = PREMIUM_ENTITLEMENT_ID) {
     try {
       const subscriber = await this.getSubscriberInfo(appUserId);
-      const entitlement = subscriber?.entitlements?.[entitlementId];
-
-      if (!entitlement) {
-        return { active: false, isInTrial: false, expiresDate: null, productIdentifier: null };
-      }
-
-      const expiresDate = entitlement.expires_date;
-      const now = new Date();
-
-      // An entitlement with no expires_date is lifetime / non-expiring
-      const isActive = !expiresDate || new Date(expiresDate) > now;
-      const isInTrial = entitlement.period_type === 'trial';
-
-      return {
-        active: isActive,
-        isInTrial: isActive ? isInTrial : false,
-        expiresDate: expiresDate || null,
-        productIdentifier: entitlement.product_identifier || null
-      };
+      return RevenueCatService._parseEntitlement(subscriber, entitlementId);
     } catch (error) {
       console.error(`❌ [REVENUECAT] Error checking entitlement for ${appUserId}:`, error.message);
       throw error;
     }
+  }
+
+  /**
+   * Pure parser for the RevenueCat V1 subscriber payload. Extracted
+   * from [hasActiveEntitlement] so the entitlement / willRenew logic
+   * can be unit-tested without mocking fetch.
+   *
+   * `willRenew` is sourced from `subscriber.subscriptions[productId]
+   * .unsubscribe_detected_at` — RC sets this timestamp the moment it
+   * detects a cancellation in the upstream store (App Store / Play),
+   * regardless of whether expiresDate has passed yet. Default `true`
+   * when no matching subscription record is present (e.g. promotional
+   * grants made via [grantEntitlement]).
+   *
+   * @param {Object|null|undefined} subscriber - `data.subscriber` from RC V1
+   * @param {string} entitlementId
+   * @returns {{active: boolean, isInTrial: boolean, expiresDate: string|null, productIdentifier: string|null, willRenew: boolean}}
+   */
+  static _parseEntitlement(subscriber, entitlementId) {
+    const entitlement = subscriber?.entitlements?.[entitlementId];
+
+    if (!entitlement) {
+      return { active: false, isInTrial: false, expiresDate: null, productIdentifier: null, willRenew: true };
+    }
+
+    const expiresDate = entitlement.expires_date;
+    const now = new Date();
+
+    // An entitlement with no expires_date is lifetime / non-expiring
+    const isActive = !expiresDate || new Date(expiresDate) > now;
+    const isInTrial = entitlement.period_type === 'trial';
+    const productIdentifier = entitlement.product_identifier || null;
+
+    const subscription = productIdentifier
+      ? subscriber?.subscriptions?.[productIdentifier]
+      : null;
+    const willRenew = !subscription?.unsubscribe_detected_at;
+
+    return {
+      active: isActive,
+      isInTrial: isActive ? isInTrial : false,
+      expiresDate: expiresDate || null,
+      productIdentifier,
+      willRenew
+    };
   }
 
   /**

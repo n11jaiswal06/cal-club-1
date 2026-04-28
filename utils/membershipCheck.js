@@ -20,11 +20,11 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes (webhooks call invalidateCache 
 
 /**
  * @param {string} userId
- * @returns {Promise<{hasAccess: boolean, isPremium: boolean, isInTrial: boolean, expiresDate: string|null, productIdentifier: string|null}>}
+ * @returns {Promise<{hasAccess: boolean, isPremium: boolean, isInTrial: boolean, expiresDate: string|null, productIdentifier: string|null, willRenew: boolean}>}
  */
 async function checkMembership(userId) {
   if (!userId) {
-    return { hasAccess: false, isPremium: false, isInTrial: false, expiresDate: null, productIdentifier: null };
+    return { hasAccess: false, isPremium: false, isInTrial: false, expiresDate: null, productIdentifier: null, willRenew: true };
   }
 
   const key = String(userId);
@@ -53,7 +53,8 @@ async function checkMembership(userId) {
       isPremium: true,
       isInTrial: rcResult.isInTrial,
       expiresDate: rcResult.expiresDate,
-      productIdentifier: rcResult.productIdentifier
+      productIdentifier: rcResult.productIdentifier,
+      willRenew: rcResult.willRenew
     };
   } else if (localResult.hasAccess) {
     // RC says no, but local DB says yes (e.g. RC grant failed after Razorpay payment)
@@ -63,16 +64,20 @@ async function checkMembership(userId) {
       isPremium: true,
       isInTrial: false, // local DB doesn't track trial vs paid
       expiresDate: localResult.expiresDate,
-      productIdentifier: null
+      productIdentifier: null,
+      willRenew: localResult.willRenew
     };
   } else {
-    // Neither source has access
+    // Neither source has access. Default willRenew: true is the
+    // safe value since the client only renders cancellation copy
+    // when the user actually has access.
     result = {
       hasAccess: false,
       isPremium: false,
       isInTrial: false,
       expiresDate: null,
-      productIdentifier: null
+      productIdentifier: null,
+      willRenew: true
     };
   }
 
@@ -89,17 +94,23 @@ async function checkRevenueCat(userId) {
     return await RevenueCatService.hasActiveEntitlement(userId, PREMIUM_ENTITLEMENT_ID);
   } catch (error) {
     console.error(`⚠️ [MEMBERSHIP] RevenueCat API error for ${userId}:`, error.message);
-    return { active: false, isInTrial: false, expiresDate: null, productIdentifier: null };
+    return { active: false, isInTrial: false, expiresDate: null, productIdentifier: null, willRenew: true };
   }
 }
 
 /**
  * Check local Membership collection.
  * Returns a safe default on error (does not throw).
+ *
+ * `willRenew` is sourced from the linked Subscription's
+ * `autoRenewing` field (set at purchase time and updated by
+ * Apple / Google / Razorpay webhooks). Defaults to `true` if the
+ * Subscription record can't be loaded.
  */
 async function checkLocalDB(userId) {
   try {
     const Membership = require('../models/schemas/Membership');
+    const Subscription = require('../models/schemas/Subscription');
     const now = new Date();
 
     const membership = await Membership.findOne({
@@ -108,13 +119,26 @@ async function checkLocalDB(userId) {
       status: { $in: ['purchased', 'active'] }
     }).sort({ end: -1 }).lean();
 
+    if (!membership) {
+      return { hasAccess: false, expiresDate: null, willRenew: true };
+    }
+
+    const subscription = await Subscription
+      .findById(membership.subscriptionId)
+      .lean();
+    // `autoRenewing` is the schema field that mirrors RC's
+    // `unsubscribe_detected_at` (inverted). Default true on missing
+    // record so the client renders the safe "renews" copy.
+    const willRenew = subscription?.autoRenewing ?? true;
+
     return {
-      hasAccess: !!membership,
-      expiresDate: membership ? membership.end.toISOString() : null
+      hasAccess: true,
+      expiresDate: membership.end.toISOString(),
+      willRenew
     };
   } catch (dbError) {
     console.error(`⚠️ [MEMBERSHIP] Local DB error for ${userId}:`, dbError.message);
-    return { hasAccess: false, expiresDate: null };
+    return { hasAccess: false, expiresDate: null, willRenew: true };
   }
 }
 
