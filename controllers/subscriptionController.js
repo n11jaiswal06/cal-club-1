@@ -984,7 +984,8 @@ async function getSubscriptionStatus(req, res) {
         isPremium: membership.isPremium,
         isInTrial: membership.isInTrial,
         expiresDate: membership.expiresDate,
-        productIdentifier: membership.productIdentifier
+        productIdentifier: membership.productIdentifier,
+        willRenew: membership.willRenew
       }
     }));
   } catch (error) {
