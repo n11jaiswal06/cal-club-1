@@ -169,7 +169,15 @@ displayQuantity: reflect the user's own words. If they said "big bowl", use "big
 measureQuantity: convert to grams/ml using these references:
 1 roti/chapati = 30g, 1 paratha = 60g, 1 puri = 25g, 1 samosa = 60g
 1 idli = 40g, 1 dosa = 100g, 1 egg = 50g, 1 scoop protein = 30g, 1 slice bread = 30g
-Volume: 1 small bowl = 150g, 1 medium bowl = 250g, 1 large bowl = 400g, 1 cup = 180g, 1 tbsp = 15g
+
+For volume-based items, set "density_class" and use that class's cells directly (do not multiply):
+* medium_density (DEFAULT — liquids, curries, dal, soup, yogurt, raita, smoothie, biryani, rice/pasta dishes, cooked vegetables): small bowl = 150g, medium bowl = 250g, large bowl = 400g, 1 cup = 180g, 1 tbsp = 15g.
+* snack_mix — namkeen, Madras mixture, sev, chivda, bhujia, chips, popcorn, trail mix: small bowl = 45g, medium bowl = 75g, large bowl = 120g, 1 cup = 72g.
+* cereal_granola — granola, muesli: small bowl = 70g, medium bowl = 110g, large bowl = 180g, 1 cup = 110g.
+* cereal_puffed — cornflakes, puffed rice/wheat, rice crispies: small bowl = 20g, medium bowl = 30g, large bowl = 50g, 1 cup = 30g.
+* nuts_seeds — loose almonds, peanuts, cashews, mixed nuts, seeds. NOT nut bars or coated nuts: small bowl = 90g, medium bowl = 150g, large bowl = 240g, 1 cup = 145g.
+* leafy_salad — mixed greens, lettuce, raw spinach, arugula: small bowl = 20g, medium bowl = 30g, large bowl = 50g, 1 cup = 30g.
+
 Liquids: 1 glass = 250ml, 1 cup coffee/tea = 150ml
 For branded/packaged items, use the product's standard weight.
 MUST always have a numeric value — never null. Unit must be "g" for solids, "ml" for liquids. Never use "serving", "plate", "bowl", or any non-metric unit.
@@ -182,6 +190,7 @@ MUST always have a numeric value — never null. Unit must be "g" for solids, "m
       "role": "main",
       "displayQuantity": { "value": 1, "unit": "cup" },
       "measureQuantity": { "value": 150, "unit": "g" },
+      "density_class": "medium_density",
       "composite": false,
       "visibleComponents": [],
       "gravyType": null
@@ -311,20 +320,34 @@ Units by food type:
 Principles:
 * Always count explicitly when items are individually distinguishable.
 * For scoopable/pourable foods, estimate area coverage on plate and convert to cups or bowl size.
+* If a bowl or plate is clearly not full, output a fractional quantity reflecting fill level (e.g., a half-full medium bowl is "0.5 medium bowl", not "1 medium bowl"). Only apply this when partial fill is visually obvious — do not invent fractions.
 * When uncertain between two close quantities, choose the midpoint.
 
-WEIGHT/VOLUME ESTIMATION — USE THESE REFERENCE WEIGHTS:
+WEIGHT/VOLUME ESTIMATION
+
+Set "density_class" on every item, then use the rule for that class.
+
+* medium_density — DEFAULT for liquids, curries, dal, soup, yogurt, raita, oats cooked, sambar, rasam, smoothie, biryani, rice dishes, pasta dishes, cooked vegetables, and anything not listed below. Use these reference weights:
+  - small bowl = 150g, medium bowl = 250g, large bowl = 400g, 1 cup = 180g, 1 tbsp = 15g.
+
+Low-density classes (use the cells directly — do not multiply):
+* snack_mix — namkeen, Madras mixture, sev, chivda, bhujia, Bombay mix, chips, popcorn, trail mix, puffed snacks. small bowl = 45g, medium bowl = 75g, large bowl = 120g, 1 cup = 72g.
+* cereal_granola — granola, muesli, dense cereal clusters. small bowl = 70g, medium bowl = 110g, large bowl = 180g, 1 cup = 110g.
+* cereal_puffed — cornflakes, puffed rice, puffed wheat, rice crispies, plain bran flakes. small bowl = 20g, medium bowl = 30g, large bowl = 50g, 1 cup = 30g.
+* nuts_seeds — loose almonds, peanuts, cashews, mixed nuts, pumpkin seeds, sunflower seeds. NOT nut bars, NOT coated/sugared nuts (those are medium_density). small bowl = 90g, medium bowl = 150g, large bowl = 240g, 1 cup = 145g.
+* leafy_salad — mixed greens, lettuce, raw spinach, arugula, leaf-only salads. small bowl = 20g, medium bowl = 30g, large bowl = 50g, 1 cup = 30g.
+
+Dish-specific overrides (use these instead of the class rule when the dish matches):
 * 1 cup cooked rice = 150g
 * 1 cup cooked pasta = 140g
+* 1 cup cooked vegetables = 150g
 * 1 medium chicken breast (boneless) = 120g
 * 1 medium egg = 50g
 * 1 slice bread = 30g
 * 1 roti/chapati = 30g
 * 1 medium apple = 150g
-* 1 cup raw leafy vegetables = 30g
-* 1 cup cooked vegetables = 150g
 
-For volume-based items: 1 cup = 180g, small bowl = 150g, medium bowl = 250g, large bowl = 400g, 1 tbsp = 15g.
+When in doubt between two classes, prefer the lower-density one (under-estimating is less harmful than the current 2–4× over-estimate).
 
 For bone-in items, estimate total weight including bone.
 
@@ -354,6 +377,7 @@ Return ONLY raw JSON. No markdown, no explanation.
       "role": "main",
       "displayQuantity": { "value": 1, "unit": "cup" },
       "measureQuantity": { "value": 150, "unit": "g" },
+      "density_class": "medium_density",
       "composite": false,
       "visibleComponents": [],
       "gravyType": null
@@ -361,6 +385,7 @@ Return ONLY raw JSON. No markdown, no explanation.
   ]
 }
 
+density_class: one of "medium_density", "snack_mix", "cereal_granola", "cereal_puffed", "nuts_seeds", "leafy_salad". See WEIGHT/VOLUME ESTIMATION above.
 visibleComponents: only for composite items. List visible/inferable ingredients. Empty array for non-composite items.
 gravyType: "dry", "semi", or "gravy" for curry-based composites. null for everything else.
 
@@ -378,11 +403,11 @@ EXAMPLE
 {
   "mealName": "Chicken Biryani & Bhuna",
   "items": [
-    { "name": "Chicken Biryani", "role": "main", "displayQuantity": { "value": 1, "unit": "medium bowl" }, "measureQuantity": { "value": 300, "unit": "g" }, "composite": true, "visibleComponents": ["basmati rice", "bone-in chicken pieces", "fried onions", "ghee", "whole spices"], "gravyType": null },
-    { "name": "Chicken Bhuna", "role": "main", "displayQuantity": { "value": 1, "unit": "small bowl" }, "measureQuantity": { "value": 200, "unit": "g" }, "composite": true, "visibleComponents": ["bone-in chicken pieces", "thick dry masala coating", "onions"], "gravyType": "dry" },
-    { "name": "Dal", "role": "main", "displayQuantity": { "value": 1, "unit": "small bowl" }, "measureQuantity": { "value": 150, "unit": "g" }, "composite": false, "visibleComponents": [], "gravyType": null },
-    { "name": "Roti", "role": "main", "displayQuantity": { "value": 2, "unit": "rotis" }, "measureQuantity": { "value": 60, "unit": "g" }, "composite": false, "visibleComponents": [], "gravyType": null },
-    { "name": "Buttermilk", "role": "side", "displayQuantity": { "value": 1, "unit": "glass" }, "measureQuantity": { "value": 250, "unit": "ml" }, "composite": false, "visibleComponents": [], "gravyType": null }
+    { "name": "Chicken Biryani", "role": "main", "displayQuantity": { "value": 1, "unit": "medium bowl" }, "measureQuantity": { "value": 300, "unit": "g" }, "density_class": "medium_density", "composite": true, "visibleComponents": ["basmati rice", "bone-in chicken pieces", "fried onions", "ghee", "whole spices"], "gravyType": null },
+    { "name": "Chicken Bhuna", "role": "main", "displayQuantity": { "value": 1, "unit": "small bowl" }, "measureQuantity": { "value": 200, "unit": "g" }, "density_class": "medium_density", "composite": true, "visibleComponents": ["bone-in chicken pieces", "thick dry masala coating", "onions"], "gravyType": "dry" },
+    { "name": "Dal", "role": "main", "displayQuantity": { "value": 1, "unit": "small bowl" }, "measureQuantity": { "value": 150, "unit": "g" }, "density_class": "medium_density", "composite": false, "visibleComponents": [], "gravyType": null },
+    { "name": "Roti", "role": "main", "displayQuantity": { "value": 2, "unit": "rotis" }, "measureQuantity": { "value": 60, "unit": "g" }, "density_class": "medium_density", "composite": false, "visibleComponents": [], "gravyType": null },
+    { "name": "Buttermilk", "role": "side", "displayQuantity": { "value": 1, "unit": "glass" }, "measureQuantity": { "value": 250, "unit": "ml" }, "density_class": "medium_density", "composite": false, "visibleComponents": [], "gravyType": null }
   ]
 }
 
