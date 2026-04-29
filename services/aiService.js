@@ -239,18 +239,30 @@ ITEM IDENTIFICATION
 Naming: Be specific when visually distinguishable (e.g., "jeera rice" not "rice", "sourdough bread" not "bread", "soba noodles" not "noodles"). Use general name when variant is unclear.
 
 Composite dish detection:
-A dish is composite ONLY when two or more MAJOR food groups are mixed/cooked together inseparably:
-* Protein + carb base: biryani, fried rice with chicken/egg, pasta with meat sauce, burrito, poke bowl, noodle bowls with protein
-* Protein + gravy: chicken curry, paneer butter masala, fish curry, mutton korma
-* Salad with protein + dressing: chicken salad, Caesar salad
-Set "composite": true ONLY for these cases.
+WHY: Decomposition exists to surface protein in composed meals where the components have materially different macros (e.g., chicken vs. rice vs. ghee) AND the user benefits from seeing the split. If neither holds, decomposition adds noise and inflates calories. Default to atomic.
 
-NOT composite (set "composite": false) — even if they contain minor secondary ingredients:
-* Single food group dishes: dal, sambar, rasam, plain rice, raita, curd, salan, chutney, soup
-* Dishes where other ingredients are just seasoning/tadka/garnish: dal fry (just lentils + tadka), cucumber raita (just yogurt + garnish), jeera rice (just rice + cumin)
-* Fried/baked single items: pakora, samosa, dosa, idli, roti, bread
-* Beverages: lassi, buttermilk, smoothie, juice
-Rule of thumb: if the dish is primarily ONE food group with spices/seasoning, it is NOT composite.
+Set "composite": true ONLY when the dish has BOTH:
+(a) a serving-sized protein portion — a piece, fillet, cube, scoop, or distinct mound of meat, fish, egg, paneer, or tofu (NOT fragments, scatter, or garnish), AND
+(b) a separate base of carbs or greens — rice, noodles, bread, pasta, leafy greens.
+
+Allowed composite patterns (this is the full list — anything outside it is atomic):
+* Biryani-style mixed rice with meat or egg (chicken/mutton/prawn biryani, fried rice with chicken/egg)
+* Plated meat/paneer/fish curry + rice or roti (chicken curry + rice, paneer butter masala + roti, fish curry + rice)
+* Pasta with meat sauce (spaghetti bolognese, chicken alfredo)
+* Salads with a protein portion (chicken caesar, grilled salmon salad, tuna salad)
+* Grain or poke bowls with protein (poke bowl, burrito bowl, grain bowl)
+* Wraps and burritos with composed filling (chicken burrito, shawarma wrap, kati roll)
+
+ALWAYS atomic ("composite": false), regardless of visible heterogeneity:
+* Snack-form / mixes: namkeen, Indian snack mixes (Madras mixture, chivda, bhujia, sev mixture), trail mix, Chex mix, granola, muesli, breakfast cereal, chips, crisps, crackers, popcorn
+* Single-piece items: samosa, pakora, dosa, idli, vada, donut, muffin, cookie, brownie, cake slice, croissant, scone, pastry, roti, bread slice
+* Fused / blended dishes: smoothie, juice, lassi, buttermilk, soup, sauce, dip, batter-based, dough-based
+* Packaged / branded items: anything sold from a bag, box, or packet, or with a brand label — even if multiple textures or colors are visible. Label nutrition is more accurate than a per-component sum.
+* Legume-led dishes: dal, sambar, rasam, chana masala, chickpea curry, rajma, hummus, chili, tofu scramble. These stay atomic even when the gravy looks meat-curry-like. If served alongside rice or bread, list the rice/bread as a separate atomic item — do NOT internally decompose the legume dish.
+* Single food group dishes with seasoning only: jeera rice (rice + cumin), dal fry (lentils + tadka), cucumber raita (yogurt + garnish), curd, chutney, salan
+* Items where "protein" is fragments, scatter, or garnish: peanuts in a snack mix, nuts on a salad, sesame on rice, bacon bits on soup, cheese sprinkle. Fragment-level protein never triggers decomposition.
+
+Rule of thumb: if the dish is primarily ONE food group with spices/seasoning, OR if it's snack-form / single-piece / packaged / blended / legume-led, it is NOT composite — regardless of how many ingredients are visible.
 
 For composite dishes only, add:
 1. "visibleComponents" array — list what you can see or infer. Be specific about:
@@ -270,7 +282,7 @@ For non-composite dishes, set "visibleComponents": [] and "gravyType": null.
 
 Do not break down items served in separate vessels or clearly occupying distinct areas of the plate — list them independently without parentheses.
 
-Packaged/branded items: Use brand and product name. Use package size as quantity (e.g., "Amul Greek Yogurt 100g cup", "Kind Protein Bar 1 bar").
+Packaged/branded items: Use brand and product name. Use package size as quantity (e.g., "Amul Greek Yogurt 100g cup", "Kind Protein Bar 1 bar"). Per the rules above, packaged items are ALWAYS "composite": false with "visibleComponents": [], even if multiple textures, colors, or pieces are visible in the bowl.
 
 LIST EVERY VISIBLE FOOD ITEM. Scan the entire image systematically:
 * Check all areas of the plate/bowl/table
