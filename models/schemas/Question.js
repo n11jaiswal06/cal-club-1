@@ -1,5 +1,31 @@
 const mongoose = require('mongoose');
 
+// Typed metadata payload for a Question option. Defined fields are the
+// only known consumers today; new metadata shapes belong on this schema
+// rather than as bare Mixed keys, so typos (e.g. `deprioritised`) and
+// shape drift get caught at write time rather than discovered in the UI.
+//
+// strict:false is intentional — additive forward-compatibility for
+// experiments (a future option might carry `displayHint`, etc.) — but
+// the canonical fields above are tracked normally so doc.save() picks
+// up changes without `markModified` gymnastics.
+const optionMetadataSchema = new mongoose.Schema({
+  // Render this option with a less prominent visual treatment. Used on
+  // Q10's "Maintain" option per PRD §6.1.
+  deprioritized: {
+    type: Boolean
+  },
+  // Body-weight fraction for rate-preset options (e.g. 0.005 == 0.5%/wk).
+  // Clients multiply by current weight to compute the kg/wk display.
+  ratePercent: {
+    type: Number
+  },
+  // True for the option that should be pre-selected on the screen.
+  isDefault: {
+    type: Boolean
+  }
+}, { _id: false, strict: false });
+
 const optionSchema = new mongoose.Schema({
   text: {
     type: String,
@@ -20,13 +46,7 @@ const optionSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
-  // Free-form per-option metadata. First uses: { deprioritized: true } on
-  // Maintain so the client can render it at smaller treatment, and
-  // { ratePercent, isDefault } on rate-preset options so the client can
-  // compute kg/wk without recomputing semantics.
-  metadata: {
-    type: mongoose.Schema.Types.Mixed
-  }
+  metadata: optionMetadataSchema
 }, { _id: false });
 
 const imageSchema = new mongoose.Schema({

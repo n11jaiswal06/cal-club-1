@@ -40,7 +40,7 @@ Authorization: Bearer <your_jwt_token>
   "height_cm": 173,                    // Required: 120-220
   "weight_kg": 82,                     // Required: 35-250
   "goal_type": "lose",                 // Required: "lose", "maintain", or "gain"
-  "pace_kg_per_week": -0.5,           // Required: -1.0 to 0.5 (negative for loss, positive for gain)
+  "pace_kg_per_week": -0.5,           // Required: -1.5 to 1.5 (negative for loss, positive for gain). Must be 0 for goal_type='recomp'.
   "desired_weight_kg": 75,            // Optional: Target weight
   "activity_level": "active",          // Optional: "sedentary", "light", "active", "very_active", "dynamic"
   "workouts_per_week": 5,             // Optional: 0-14
@@ -59,7 +59,7 @@ Authorization: Bearer <your_jwt_token>
 | `height_cm` | number | ✅ | 120-220 | Height in centimeters |
 | `weight_kg` | number | ✅ | 35-250 | Current weight in kilograms |
 | `goal_type` | string | ✅ | `"lose"`, `"maintain"`, `"gain"`, `"recomp"` | Primary fitness goal. `"recomp"` pairs with `pace_kg_per_week: 0` (maintenance kcal). |
-| `pace_kg_per_week` | number | ✅ | -1.0 to 0.5 | Weekly weight change rate (negative = loss) |
+| `pace_kg_per_week` | number | ✅ | -1.5 to 1.5 | Weekly weight change rate (negative = loss). Coerced to 0 when `goal_type='recomp'`; a warning is returned if the request specified non-zero. |
 | `desired_weight_kg` | number | ❌ | 30-250 | Target weight for goal calculation |
 | `activity_level` | string | ❌ | `"sedentary"`, `"light"`, `"active"`, `"very_active"`, `"dynamic"` | Daily activity level (default: `"active"`) |
 | `workouts_per_week` | number | ❌ | 0-14 | Number of structured workouts per week |

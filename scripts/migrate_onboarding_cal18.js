@@ -1,16 +1,16 @@
 // scripts/migrate_onboarding_cal18.js
 //
 // Reshapes the onboarding questions for CAL-18:
-//   • Q10 (goal selection) → 4 options with subtitle education + semantic
+//   • Q10 (goal selection)   → 4 options with subtitle education + semantic
 //     `value` per option. Maintain carries metadata.deprioritized=true.
-//   • Q11 (target weight)  → adds skipIf (skip when goal == maintain).
-//   • Q12 (encouragement)  → adds skipIf (skip when goal == maintain) since
+//   • Q11 (target weight)    → adds skipIf (skip when goal == maintain).
+//   • Q12 (encouragement)    → adds skipIf (skip when goal == maintain) since
 //     its copy assumes the user has set a target weight.
-//   • Q13 (weekly rate)    → split into two preset questions:
-//       Q13a sequence 13   = loss rate (3 options, skipIf goal != lose)
-//       Q13b sequence 13.5 = gain rate (2 options, skipIf goal != gain)
-//   • Q13c sequence 13.7   = NEW recomp expectation INFO_SCREEN
+//   • Q13a sequence 13.3     = NEW loss rate (3 options, skipIf goal != lose)
+//   • Q13b sequence 13.5     = NEW gain rate (2 options, skipIf goal != gain)
+//   • Q13c sequence 13.7     = NEW recomp expectation INFO_SCREEN
 //     (skipIf goal != recomp)
+//   • Old free-form rate question, if found by fingerprint, is deactivated.
 //
 // CAL-9 pinned the goal-type question by MongoDB _id in the Flutter bloc
 // (`6908fe66896ccf24778c907d`). We update Q10 in place by _id when present
@@ -126,18 +126,22 @@ function getMongoUri() {
   return uri;
 }
 
+// Map of semantic value → display text, derived from Q10_GOAL_OPTIONS so
+// the textIn fallback below stays in lockstep with whatever Q10 actually
+// renders. Edits to Q10's option text propagate here automatically.
+const VALUE_TO_GOAL_TEXT = Object.freeze(
+  Q10_GOAL_OPTIONS.reduce((acc, opt) => {
+    if (opt.value && opt.text) acc[opt.value] = opt.text;
+    return acc;
+  }, {})
+);
+
 // Build a skipIf rule that hides a question when the user's goal-type
 // answer is in the given valueIn list. Includes the matching display
 // texts in `textIn` as a fallback for clients that haven't migrated to
 // sending semantic values yet.
 function buildGoalSkipIf(goalQuestionId, valueIn) {
-  const valueToText = {
-    gain: 'Gain muscle',
-    lose: 'Lose fat',
-    recomp: 'Build muscle while losing weight',
-    maintain: 'Maintain',
-  };
-  const textIn = valueIn.map((v) => valueToText[v]).filter(Boolean);
+  const textIn = valueIn.map((v) => VALUE_TO_GOAL_TEXT[v]).filter(Boolean);
   return [
     {
       questionId: goalQuestionId,
@@ -145,6 +149,20 @@ function buildGoalSkipIf(goalQuestionId, valueIn) {
       textIn,
     },
   ];
+}
+
+// Heuristic: a doc is plausibly the goal-type question if its options
+// include text matching any of the legacy/new goal labels. Cheap guard
+// against the sequence:10 fallback overwriting an unrelated question
+// (the dev DB was reordered, so blind sequence matching is unsafe).
+function looksLikeGoalQuestion(doc) {
+  const options = Array.isArray(doc?.options) ? doc.options : [];
+  if (options.length < 2) return false;
+  const goalRegex = /(lose|gain|maintain|recomp|weight|muscle)/i;
+  return options.some((opt) => {
+    const text = typeof opt === 'string' ? opt : opt?.text;
+    return typeof text === 'string' && goalRegex.test(text);
+  });
 }
 
 async function findGoalQuestion() {
@@ -155,7 +173,15 @@ async function findGoalQuestion() {
   }
   if (q) return { q, foundBy: 'pinned-id' };
 
+  // Fallback by sequence is risky on reordered DBs, so verify by
+  // fingerprint before treating the result as the goal question.
   q = await Question.findOne({ sequence: 10 });
+  if (q && !looksLikeGoalQuestion(q)) {
+    return {
+      q: null,
+      foundBy: `sequence-10-rejected (doc at seq 10 is "${q.text}" — not goal-shaped)`,
+    };
+  }
   return { q, foundBy: q ? 'sequence-10' : 'not-found' };
 }
 
@@ -172,11 +198,32 @@ async function findByText(textPattern, extraFilter = {}) {
   return { q, foundBy: q ? `text=/${textPattern}/i` : 'not-found' };
 }
 
-function fmtChange(label, before, after) {
-  const same = JSON.stringify(before) === JSON.stringify(after);
-  return same
-    ? `  · ${label}: no change`
-    : `  · ${label}: will update`;
+// Run one update op against an optional Mongo session. Same status
+// semantics as the inline loop the apply phase used to use.
+async function runOp(op, session) {
+  const opts = { upsert: op.upsert };
+  if (session) opts.session = session;
+  const result = await Question.updateOne(op.filter, op.update, opts);
+  const status =
+    result.upsertedCount > 0
+      ? '✓ inserted'
+      : result.modifiedCount > 0
+      ? '✓ updated'
+      : result.matchedCount > 0
+      ? '· no change'
+      : '✗ no match';
+  console.log(`  ${status} — ${op.label}`);
+}
+
+// Mongo throws specific error codes when a standalone deployment can't
+// run a transaction. Other failures (network, validation) should NOT be
+// caught by the standalone-fallback branch.
+function isStandaloneTransactionError(err) {
+  if (!err) return false;
+  if (err.codeName === 'IllegalOperation') return true;
+  if (err.code === 20) return true; // legacy IllegalOperation
+  const msg = String(err.message || '');
+  return /transaction numbers are only allowed|replica set|standalone/i.test(msg);
 }
 
 async function migrate({ apply }) {
@@ -387,28 +434,46 @@ async function migrate({ apply }) {
     return;
   }
 
-  // 4) Apply phase.
+  // 4) Apply phase — wrap in a Mongo transaction when the connected
+  //    deployment is a replica set (Atlas, prod). On a standalone dev
+  //    Mongo, transactions aren't supported; fall back to the unwrapped
+  //    loop and warn so the operator knows partial-failure recovery is
+  //    "re-run the script."
   console.log('\nApplying...');
-  for (const op of ops) {
-    const result = await Question.updateOne(op.filter, op.update, { upsert: op.upsert });
-    const status =
-      result.upsertedCount > 0
-        ? '✓ inserted'
-        : result.modifiedCount > 0
-        ? '✓ updated'
-        : result.matchedCount > 0
-        ? '· no change'
-        : '✗ no match';
-    console.log(`  ${status} — ${op.label}`);
+  const session = await mongoose.startSession();
+  let usedTransaction = false;
+  try {
+    await session.withTransaction(async () => {
+      usedTransaction = true;
+      for (const op of ops) {
+        await runOp(op, session);
+      }
+    });
+  } catch (err) {
+    if (!usedTransaction && isStandaloneTransactionError(err)) {
+      console.log(
+        '  ℹ Standalone Mongo detected — transactions unavailable. Falling ' +
+        'back to non-transactional apply. If this run fails mid-way, re-run ' +
+        'the script (ops are idempotent).'
+      );
+      for (const op of ops) {
+        await runOp(op, null);
+      }
+    } else {
+      throw err;
+    }
+  } finally {
+    await session.endSession();
   }
 
   console.log('\n✓ Migration complete.\n');
 
-  // 5) Verify final state.
+  // 5) Verify final state. Q13a is the upserted-by-sequence loss-rate doc
+  //    at 13.3 — NOT the deactivated old rate question (rateQ).
   const finalGoal = await Question.findById(goalQ._id).lean();
   const q11 = targetWeightQ ? await Question.findById(targetWeightQ._id).lean() : null;
   const q12 = encouragementQ ? await Question.findById(encouragementQ._id).lean() : null;
-  const q13a = rateQ ? await Question.findById(rateQ._id).lean() : null;
+  const q13a = await Question.findOne({ sequence: 13.3 }).lean();
   const q13b = await Question.findOne({ sequence: 13.5 }).lean();
   const q13c = await Question.findOne({ sequence: 13.7 }).lean();
 
