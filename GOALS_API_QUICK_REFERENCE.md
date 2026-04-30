@@ -59,6 +59,7 @@ curl -X POST http://localhost:3000/goals/calculate-and-save \
 "lose"      // Fat loss
 "maintain"  // Weight maintenance
 "gain"      // Muscle gain
+"recomp"    // Recomposition (build muscle while losing fat) — pace_kg_per_week must be 0
 ```
 
 ### activity_level

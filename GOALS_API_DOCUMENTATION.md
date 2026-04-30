@@ -58,7 +58,7 @@ Authorization: Bearer <your_jwt_token>
 | `age_years` | number | ✅ | 13-80 | User's age in years |
 | `height_cm` | number | ✅ | 120-220 | Height in centimeters |
 | `weight_kg` | number | ✅ | 35-250 | Current weight in kilograms |
-| `goal_type` | string | ✅ | `"lose"`, `"maintain"`, `"gain"` | Primary fitness goal |
+| `goal_type` | string | ✅ | `"lose"`, `"maintain"`, `"gain"`, `"recomp"` | Primary fitness goal. `"recomp"` pairs with `pace_kg_per_week: 0` (maintenance kcal). |
 | `pace_kg_per_week` | number | ✅ | -1.0 to 0.5 | Weekly weight change rate (negative = loss) |
 | `desired_weight_kg` | number | ❌ | 30-250 | Target weight for goal calculation |
 | `activity_level` | string | ❌ | `"sedentary"`, `"light"`, `"active"`, `"very_active"`, `"dynamic"` | Daily activity level (default: `"active"`) |
@@ -301,7 +301,8 @@ curl -X POST http://localhost:3000/goals/calculate-and-save \
 |-----------|----------------|-----------------|-------|
 | `lose` (Fat Loss) | 2.0 | 25% | Remainder (~45-50%) |
 | `maintain` (Lifestyle) | 1.6 | 30% | Remainder (~50-55%) |
-| `gain` (Muscle Gain) | 1.8 | 25% | Remainder (~50-55%) |
+| `gain` (Muscle Gain) | 2.2 | 25% | Remainder (~50-55%) |
+| `recomp` (Recomposition) | 2.0 | 30% | Remainder (~45-50%) |
 
 ### Guardrails
 - **Calorie Floor (v2)**: Male ≥1400 kcal, Female ≥1200 kcal

@@ -310,7 +310,10 @@ class GoalService {
     const macroConfigs = {
       'lose': { protein_factor: 2.0, fat_pct: 0.25 },
       'maintain': { protein_factor: 1.6, fat_pct: 0.30 },
-      'gain': { protein_factor: 2.2, fat_pct: 0.25 }
+      'gain': { protein_factor: 2.2, fat_pct: 0.25 },
+      // Recomposition: maintenance kcal with high protein for muscle
+      // preservation and generous fat since calories aren't restricted.
+      'recomp': { protein_factor: 2.0, fat_pct: 0.30 }
     };
 
     const config = macroConfigs[goal_type] || macroConfigs['maintain'];
@@ -511,7 +514,7 @@ class GoalService {
       age_years: { type: 'number', min: 13, max: 80 },
       height_cm: { type: 'number', min: 120, max: 220 },
       weight_kg: { type: 'number', min: 35, max: 250 },
-      goal_type: { type: 'enum', values: ['lose', 'maintain', 'gain'] },
+      goal_type: { type: 'enum', values: ['lose', 'maintain', 'gain', 'recomp'] },
       pace_kg_per_week: { type: 'number', min: -1.5, max: 1.5 }
     };
 

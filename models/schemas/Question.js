@@ -13,6 +13,19 @@ const optionSchema = new mongoose.Schema({
   icon: {
     type: String,
     trim: true
+  },
+  // Semantic identifier (e.g. "lose", "recomp", "steady"). When present,
+  // server logic and client branching match on this rather than display text.
+  value: {
+    type: String,
+    trim: true
+  },
+  // Free-form per-option metadata. First uses: { deprioritized: true } on
+  // Maintain so the client can render it at smaller treatment, and
+  // { ratePercent, isDefault } on rate-preset options so the client can
+  // compute kg/wk without recomputing semantics.
+  metadata: {
+    type: mongoose.Schema.Types.Mixed
   }
 }, { _id: false });
 
@@ -33,6 +46,43 @@ const imageSchema = new mongoose.Schema({
   height: {
     type: Number
   }
+}, { _id: false });
+
+// Structured content for INFO_SCREEN questions (the recomp expectation
+// screen, etc.). Kept separate from `text`/`subtext` so the client can
+// render headline + body + bullets distinctly without parsing newlines.
+const infoScreenSchema = new mongoose.Schema({
+  heading: {
+    type: String,
+    trim: true
+  },
+  body: {
+    type: String,
+    trim: true
+  },
+  bullets: [{
+    type: String,
+    trim: true
+  }]
+}, { _id: false });
+
+// One conditional rule that hides this question if the user's previously-
+// stored answer to `questionId` matches any value in `valueIn` (semantic) or
+// any text in `textIn` (display fallback). Multiple rules combine as OR.
+const skipIfSchema = new mongoose.Schema({
+  questionId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Question',
+    required: true
+  },
+  valueIn: [{
+    type: String,
+    trim: true
+  }],
+  textIn: [{
+    type: String,
+    trim: true
+  }]
 }, { _id: false });
 
 const questionSchema = new mongoose.Schema({
@@ -63,6 +113,7 @@ const questionSchema = new mongoose.Schema({
       'MEAL_TIMING',
       'NOTIFICATION_PERMISSION',
       'GOAL_CALCULATION',
+      'INFO_SCREEN',
       // Legacy types for backward compatibility
       'text',
       'number',
@@ -79,6 +130,8 @@ const questionSchema = new mongoose.Schema({
   },
   options: [optionSchema],
   image: imageSchema,
+  infoScreen: infoScreenSchema,
+  skipIf: [skipIfSchema],
   sequence: {
     type: Number,
     required: true,
