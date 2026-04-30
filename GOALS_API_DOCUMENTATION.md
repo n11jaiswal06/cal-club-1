@@ -304,7 +304,7 @@ curl -X POST http://localhost:3000/goals/calculate-and-save \
 | `gain` (Muscle Gain) | 1.8 | 25% | Remainder (~50-55%) |
 
 ### Guardrails
-- **Calorie Floor**: Male ≥1500 kcal, Female ≥1200 kcal
+- **Calorie Floor (v2)**: Male ≥1400 kcal, Female ≥1200 kcal
 - **Protein Minimum**: ≥1.4 g/kg body weight
 - **Fat Minimum**: ≥0.6 g/kg body weight
 

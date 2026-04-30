@@ -191,7 +191,7 @@ curl -X POST http://localhost:3000/goals/calculate-and-save \
 
 ## 🛡️ Safety Guardrails
 
-- ✅ Male calorie floor: **1500 kcal**
+- ✅ Male calorie floor (v2): **1400 kcal**
 - ✅ Female calorie floor: **1200 kcal**
 - ✅ Minimum protein: **1.4 g/kg**
 - ✅ Minimum fat: **0.6 g/kg**

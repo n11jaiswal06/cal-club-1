@@ -351,8 +351,9 @@ class GoalService {
     let adjustedProtein = protein_g;
     let adjustedFat = fat_g;
 
-    // Calorie floor
-    const calorieFloor = sex_at_birth === 'male' ? 1500 : 1200;
+    // Calorie floor — PRD: 1,400 (male) / 1,200 (female). Same floor will
+    // apply to the Dynamic baseline calc when CAL-22 lands.
+    const calorieFloor = sex_at_birth === 'male' ? 1400 : 1200;
     if (adjustedCalorieTarget < calorieFloor) {
       adjustedCalorieTarget = calorieFloor;
       warnings.push(`Calorie target adjusted to safety floor (${calorieFloor} kcal)`);
