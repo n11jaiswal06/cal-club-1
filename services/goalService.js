@@ -310,7 +310,10 @@ class GoalService {
     const macroConfigs = {
       'lose': { protein_factor: 2.0, fat_pct: 0.25 },
       'maintain': { protein_factor: 1.6, fat_pct: 0.30 },
-      'gain': { protein_factor: 2.2, fat_pct: 0.25 }
+      'gain': { protein_factor: 2.2, fat_pct: 0.25 },
+      // Recomposition: maintenance kcal with high protein for muscle
+      // preservation and generous fat since calories aren't restricted.
+      'recomp': { protein_factor: 2.0, fat_pct: 0.30 }
     };
 
     const config = macroConfigs[goal_type] || macroConfigs['maintain'];
@@ -421,8 +424,12 @@ class GoalService {
       // 4) Calculate TDEE
       const tdee = rmr + neat_kcal + eat_kcal;
 
-      // 5) Calculate goal adjustment
-      const weekly_kcal_delta = inputs.pace_kg_per_week * this.KCAL_PER_KG_WEEK;
+      // 5) Calculate goal adjustment.
+      //    PRD §6.2: recomp is maintenance kcal regardless of any pace input.
+      //    Coerce pace to 0 for the calc; validateInputs surfaces a warning
+      //    when the client sent a non-zero value, so the override is visible.
+      const paceForCalc = inputs.goal_type === 'recomp' ? 0 : inputs.pace_kg_per_week;
+      const weekly_kcal_delta = paceForCalc * this.KCAL_PER_KG_WEEK;
       const daily_kcal_delta = weekly_kcal_delta / 7;
       const calorie_target = tdee + daily_kcal_delta;
 
@@ -511,7 +518,7 @@ class GoalService {
       age_years: { type: 'number', min: 13, max: 80 },
       height_cm: { type: 'number', min: 120, max: 220 },
       weight_kg: { type: 'number', min: 35, max: 250 },
-      goal_type: { type: 'enum', values: ['lose', 'maintain', 'gain'] },
+      goal_type: { type: 'enum', values: ['lose', 'maintain', 'gain', 'recomp'] },
       pace_kg_per_week: { type: 'number', min: -1.5, max: 1.5 }
     };
 
@@ -559,9 +566,17 @@ class GoalService {
     if (inputs.goal_type && inputs.pace_kg_per_week !== undefined) {
       const goalSign = inputs.goal_type === 'lose' ? -1 : inputs.goal_type === 'gain' ? 1 : 0;
       const paceSign = Math.sign(inputs.pace_kg_per_week);
-      
+
       if (goalSign !== 0 && paceSign !== 0 && goalSign !== paceSign) {
         warnings.push(`Goal type (${inputs.goal_type}) conflicts with pace (${inputs.pace_kg_per_week} kg/week). Using pace for calculations.`);
+      }
+
+      // PRD §6.2: recomp is maintenance kcal — pace must be 0. The general
+      // sign-conflict check above doesn't fire for recomp because goalSign=0,
+      // so we add an explicit clause. computeTargetsV2 coerces pace to 0
+      // for the calculation regardless; this surfaces the misuse to clients.
+      if (inputs.goal_type === 'recomp' && paceSign !== 0) {
+        warnings.push(`Goal type 'recomp' requires pace=0 (maintenance kcal). Got ${inputs.pace_kg_per_week}; coercing to 0.`);
       }
     }
 

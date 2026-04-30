@@ -192,7 +192,7 @@ class OnboardingService {
           _id: notificationQuestionId,
           isActive: true
         })
-          .select('_id text subtext type options sequence image')
+          .select('_id text subtext type options sequence image infoScreen skipIf')
           .lean();
         
         return question ? [question] : [];
@@ -232,7 +232,7 @@ class OnboardingService {
           isActive: true
         })
           .sort({ sequence: 1 })
-          .select('_id text subtext type options sequence image')
+          .select('_id text subtext type options sequence image infoScreen skipIf')
           .lean();
 
         // Fetch end questions
@@ -241,7 +241,7 @@ class OnboardingService {
           isActive: true
         })
           .sort({ sequence: 1 })
-          .select('_id text subtext type options sequence image')
+          .select('_id text subtext type options sequence image infoScreen skipIf')
           .lean();
 
         // Combine: plan questions first, then end questions
@@ -251,7 +251,7 @@ class OnboardingService {
       // Default behavior: return all active questions
       return await Question.find({ isActive: true })
         .sort({ sequence: 1 })
-        .select('_id text subtext type options sequence image');
+        .select('_id text subtext type options sequence image infoScreen skipIf');
     } catch (error) {
       throw new Error(`Failed to fetch active questions: ${error.message}`);
     }

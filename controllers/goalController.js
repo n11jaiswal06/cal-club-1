@@ -183,6 +183,8 @@ async function calculateAndSaveGoals(req, res) {
       const targetDate = new Date();
       targetDate.setDate(targetDate.getDate() + (weeksToGoal * 7));
       goalDescription = `Gain ${Math.abs(targetWeight - currentWeight).toFixed(1)} kg by ${targetDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}`;
+    } else if (goalType === 'recomp') {
+      goalDescription = `Recomp at ${currentWeight} kg`;
     } else {
       goalDescription = `Maintain weight at ${currentWeight} kg`;
     }

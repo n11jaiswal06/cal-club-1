@@ -59,6 +59,7 @@ curl -X POST http://localhost:3000/goals/calculate-and-save \
 "lose"      // Fat loss
 "maintain"  // Weight maintenance
 "gain"      // Muscle gain
+"recomp"    // Recomposition (build muscle while losing fat) — pace_kg_per_week must be 0
 ```
 
 ### activity_level
@@ -86,7 +87,7 @@ curl -X POST http://localhost:3000/goals/calculate-and-save \
 | age_years | 13 | 80 | - |
 | height_cm | 120 | 220 | - |
 | weight_kg | 35 | 250 | - |
-| pace_kg_per_week | -1.0 | 0.5 | - |
+| pace_kg_per_week | -1.5 | 1.5 | - |
 | workouts_per_week | 0 | 14 | 0 |
 | avg_workout_duration_min | 1 | ∞ | 45 |
 
