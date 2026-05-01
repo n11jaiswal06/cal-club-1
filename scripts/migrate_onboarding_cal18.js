@@ -255,6 +255,12 @@ async function migrate({ apply }) {
   }
 
   const goalSkipIfMaintainOnly = buildGoalSkipIf(goalQ._id, ['maintain']);
+  // Target weight + encouragement skip for both maintain AND recomp:
+  // recomp = "no change in weight", so a target weight is redundant and
+  // would let the user contradict their own goal (e.g. recomp + 60 kg
+  // target while currently 70 kg).
+  const goalSkipIfMaintainOrRecomp =
+      buildGoalSkipIf(goalQ._id, ['maintain', 'recomp']);
   const goalSkipIfNotLose = buildGoalSkipIf(goalQ._id, ['gain', 'recomp', 'maintain']);
   const goalSkipIfNotGain = buildGoalSkipIf(goalQ._id, ['lose', 'recomp', 'maintain']);
   const goalSkipIfNotRecomp = buildGoalSkipIf(goalQ._id, ['gain', 'lose', 'maintain']);
@@ -319,11 +325,11 @@ async function migrate({ apply }) {
 
   if (targetWeightQ) {
     ops.push({
-      label: 'Q11 target weight — skipIf maintain',
+      label: 'Q11 target weight — skipIf maintain or recomp',
       filter: { _id: targetWeightQ._id },
       update: {
         $set: {
-          skipIf: goalSkipIfMaintainOnly,
+          skipIf: goalSkipIfMaintainOrRecomp,
         },
       },
       upsert: false,
@@ -332,11 +338,11 @@ async function migrate({ apply }) {
 
   if (encouragementQ) {
     ops.push({
-      label: 'Q12 encouragement — skipIf maintain (copy assumes a target)',
+      label: 'Q12 encouragement — skipIf maintain or recomp (copy assumes a target)',
       filter: { _id: encouragementQ._id },
       update: {
         $set: {
-          skipIf: goalSkipIfMaintainOnly,
+          skipIf: goalSkipIfMaintainOrRecomp,
         },
       },
       upsert: false,
