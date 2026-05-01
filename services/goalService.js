@@ -808,6 +808,109 @@ class GoalService {
       "outcome override must be 'static_permission_denied' or 'static_sync_failed'"
     );
   }
+
+  /**
+   * CAL-23: Pure math for today's calorie goal under the Dynamic variant.
+   * `today's_goal = baselineGoal + min(stepBonus + workoutBonus, 50% × baseline)`
+   *
+   * Step bonus uses gross daily steps. PRD §7.4 calls for excluding
+   * workout-window steps, but ActivityStore stores only daily totals per
+   * source — no intraday breakdown and no per-workout steps field — so the
+   * dedup isn't computable from current data. The 50% cap bounds the
+   * impact; revisit if a future health-sync surface adds per-workout step
+   * counts. See CAL-23 plan for details.
+   *
+   * Workout bonus subtracts BMR-during-workout (rmr/1440 × duration_min)
+   * from each workout's gross calories before applying the 50% haircut, so
+   * we don't credit users for kcal they would have burned at rest anyway.
+   * The max(0, …) guard zeroes degenerate cases (low-MET workout reporting
+   * fewer kcal than rest BMR for the duration).
+   *
+   * Pure / deterministic / idempotent — same inputs always produce the
+   * same output, no I/O.
+   *
+   * @param {Object} params
+   * @param {number} params.baselineGoal - Bonus-free BMR×1.2 baseline
+   *   (User.goals.baselineGoal). The cap is computed from this.
+   * @param {number} params.netSteps - Gross daily steps (no workout-window
+   *   dedup; see note above).
+   * @param {Array<{calories_burned:number, duration_min:number}>} params.workouts
+   *   Today's workouts. Items missing or with non-finite calories_burned /
+   *   duration_min contribute 0.
+   * @param {number} params.rmrPerDay - User's Mifflin-St Jeor RMR in
+   *   kcal/day (User.goals.rmr).
+   * @returns {{
+   *   stepBonus:number, workoutBonus:number,
+   *   bonusUncapped:number, bonusApplied:number, capped:boolean,
+   *   todaysGoal:number,
+   *   breakdown:{
+   *     netSteps:number,
+   *     workouts:Array<{kcal_burned:number, duration_min:number,
+   *                     bmr_during:number, net_kcal:number,
+   *                     contribution:number}>
+   *   }
+   * }}
+   */
+  computeTodaysGoal({ baselineGoal, netSteps, workouts, rmrPerDay }) {
+    if (!Number.isFinite(baselineGoal) || baselineGoal <= 0) {
+      throw new Error('baselineGoal must be a positive number');
+    }
+    if (!Number.isFinite(rmrPerDay) || rmrPerDay <= 0) {
+      throw new Error('rmrPerDay must be a positive number');
+    }
+
+    const safeSteps = Number.isFinite(netSteps) && netSteps > 0 ? netSteps : 0;
+    const stepBonus = safeSteps * this.DYNAMIC.STEP_COEF;
+
+    const bmrPerMin = rmrPerDay / 1440;
+    const workoutBreakdown = [];
+    let workoutBonus = 0;
+    for (const w of workouts || []) {
+      // Skip malformed entries — without both kcal and duration we can't
+      // net out BMR-during-workout, so crediting them risks inflating the
+      // bonus from bad sync payloads. Logged in the breakdown as a no-op
+      // would be noisy; dropping them is cleaner.
+      if (!w || !Number.isFinite(w.calories_burned) || !Number.isFinite(w.duration_min)) {
+        continue;
+      }
+      const kcal = w.calories_burned;
+      const dur = w.duration_min;
+      const bmrDuring = bmrPerMin * dur;
+      const netKcal = Math.max(0, kcal - bmrDuring);
+      const contribution = netKcal * this.DYNAMIC.WORKOUT_HAIRCUT;
+      workoutBonus += contribution;
+      workoutBreakdown.push({
+        kcal_burned: Math.round(kcal),
+        duration_min: Math.round(dur),
+        bmr_during: Math.round(bmrDuring),
+        net_kcal: Math.round(netKcal),
+        contribution: Math.round(contribution)
+      });
+    }
+
+    const bonusUncapped = stepBonus + workoutBonus;
+    const cap = 0.5 * baselineGoal;
+    const capped = bonusUncapped > cap;
+    const bonusApplied = capped ? cap : bonusUncapped;
+
+    // Round todaysGoal to nearest 5 so the home-page number stays on the
+    // same 5-kcal grid as baselineGoal (rounded in computeDynamicBaseline)
+    // and the choice-screen preview rows.
+    const todaysGoal = Math.round((baselineGoal + bonusApplied) / 5) * 5;
+
+    return {
+      stepBonus: Math.round(stepBonus),
+      workoutBonus: Math.round(workoutBonus),
+      bonusUncapped: Math.round(bonusUncapped),
+      bonusApplied: Math.round(bonusApplied),
+      capped,
+      todaysGoal,
+      breakdown: {
+        netSteps: Math.round(safeSteps),
+        workouts: workoutBreakdown
+      }
+    };
+  }
 }
 
 module.exports = new GoalService();

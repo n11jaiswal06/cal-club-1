@@ -9,6 +9,7 @@ const Membership = require('../models/schemas/Membership');
 const { checkMembership } = require('../utils/membershipCheck');
 const { validatePhase, getCurrentPhaseIST } = require('../config/heroBriefFallbacks');
 const { getTodayDateString } = require('../utils/dateUtils');
+const { buildTodaysGoal } = require('./todaysGoalService');
 
 // Interfaces for type consistency
 const AppBarData = {
@@ -840,6 +841,13 @@ class AppFormatService {
       // Get weekly overview data
       const weeklyOverview = await this.getWeeklyOverviewData(userIdObjectId, dailyGoal.calorie);
 
+      // CAL-23: dynamic-goal block. Returns null for static users or
+      // dynamic users missing the cached rmr/baselineGoal (i.e. those who
+      // haven't re-saved goals since the CAL-23 rollout). Recomputed
+      // lazily on every /app/progress, so /activity-store/sync writes
+      // invalidate implicitly without a write-path coupling.
+      const dynamicGoal = await buildTodaysGoal(user, getTodayDateString());
+
       // Footer data (static navigation)
       const footerData = [
         {
@@ -862,7 +870,7 @@ class AppFormatService {
         }
       ];
 
-      return {
+      const response = {
         header,
         weightProgress: {
           startWeight: startWeight || 0,
@@ -880,6 +888,10 @@ class AppFormatService {
         weeklyOverview,
         footerData
       };
+      if (dynamicGoal) {
+        response.dynamicGoal = dynamicGoal;
+      }
+      return response;
     } catch (error) {
       throw new Error(`Failed to fetch progress data: ${error.message}`);
     }
