@@ -31,13 +31,6 @@ const CAL24_CHOICE_ID = '69f43ca240000000000000a1';
 const CAL24_PRIMING_ID = '69f43ca240000000000000a3';
 const CAL24_IMPORT_ID = '69f43ca240000000000000a5';
 
-// CAL-18 pin: the goal-type question's _id, used here to build the skipIf
-// rule on 14.3 / 14.5 — but 14.x's skipIf actually targets the *choice*
-// question (14.1), not goal-type. We still surface goal-type's id in case a
-// future rule wants to reference it.
-// (Choice-question pin used below.)
-const CHOICE_QUESTION_ID = CAL24_CHOICE_ID;
-
 // PRD §6.4 — Dynamic vs Static choice screen.
 const CHOICE_OPTIONS = [
   {
@@ -63,7 +56,6 @@ const CHOICE_PREVIEW_PAYLOAD = {
   recommendedBadgeText: 'Recommended',
   // The "honest disclosure" line called out in PRD §6.4 — sits on the
   // Dynamic option, distinct from the supporting subtext above.
-  disclosureHeading: '',
   disclosureBody:
     'On low-activity days, your goal will be more accurate to your real needs (and may be lower than a fixed daily goal).',
 };
@@ -130,7 +122,7 @@ function buildChoiceSkipIf(valueIn) {
   const textIn = valueIn.map((v) => valueToText[v]).filter(Boolean);
   return [
     {
-      questionId: new mongoose.Types.ObjectId(CHOICE_QUESTION_ID),
+      questionId: new mongoose.Types.ObjectId(CAL24_CHOICE_ID),
       valueIn,
       textIn,
     },
@@ -309,9 +301,7 @@ async function migrate({ apply }) {
   );
   console.log(
     `Q14.5 (import)   type: ${importQ?.type}, dataImport states: ${
-      importQ?.dataImport
-        ? Object.keys(importQ.dataImport.toObject?.() || importQ.dataImport).length
-        : 'MISSING'
+      importQ?.dataImport ? Object.keys(importQ.dataImport).length : 'MISSING'
     }, skipIf: ${importQ?.skipIf?.length || 0}`
   );
 }

@@ -115,7 +115,8 @@ const choicePreviewSchema = new mongoose.Schema({
 // CAL-24: priming screen shown before invoking the system health-permission
 // sheet. Narrow-scope copy lives here; the actual permission request is
 // triggered by the FE on CTA press. `secondaryCtaText` lets the user opt
-// out — that path lands on the static fallback (outcome=static_chosen).
+// out before the system sheet appears; the FE chooses which `outcome`
+// enum to persist for that path (see CAL-26).
 const healthPermissionPrimingSchema = new mongoose.Schema({
   heading: { type: String, trim: true },
   body: { type: String, trim: true },
