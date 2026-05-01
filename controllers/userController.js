@@ -1,4 +1,4 @@
-const { updateUser } = require('../models/user');
+const { updateUser, findUserById } = require('../models/user');
 const parseBody = require('../utils/parseBody');
 const { reportError } = require('../utils/sentryReporter');
 
@@ -10,7 +10,11 @@ function updateUserProfile(req, res) {
       return;
     }
 
-    // Only allow updating specific fields for security
+    // Only allow updating specific fields for security.
+    // CAL-21: goalType, intent, outcome, baselineGoal are intentionally
+    // excluded — they are calculated outputs of POST /goals/calculate-and-save
+    // and admitting them here would let clients corrupt the intent/outcome
+    // invariant the home page relies on.
     const allowedFields = ['name', 'email'];
     const allowedGoalFields = ['goal', 'targetGoal', 'targetWeight', 'dailyCalories', 'dailyProtein', 'dailyCarbs', 'dailyFats'];
     const filteredData = {};
@@ -77,6 +81,48 @@ function updateUserProfile(req, res) {
       res.end(JSON.stringify({ error: 'Failed to update user', details: error.message }));
     }
   });
+}
+
+/**
+ * GET /users/profile
+ *
+ * Returns the safe user profile shape (mirrors the PATCH response). The
+ * home page reads `goals.goalType` from here to choose the Dynamic vs
+ * Static display variant (CAL-21). Identity comes from the JWT, not the
+ * request — there is no path/query parameter.
+ */
+async function getUserProfile(req, res) {
+  try {
+    if (!req.user || !req.user.userId) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Authentication required' }));
+      return;
+    }
+
+    const user = await findUserById(req.user.userId);
+    if (!user) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'User not found' }));
+      return;
+    }
+
+    const safeUserData = {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      goals: user.goals,
+      isActive: user.isActive,
+      lastLoginAt: user.lastLoginAt,
+      updatedAt: user.updatedAt,
+    };
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(safeUserData));
+  } catch (error) {
+    reportError(error, { req });
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Failed to fetch user profile', details: error.message }));
+  }
 }
 
 /**
@@ -195,7 +241,8 @@ function validateGoals(goals) {
   return errors;
 }
 
-module.exports = { 
+module.exports = {
   updateUserProfile,
+  getUserProfile,
   deleteUser
-}; 
+};

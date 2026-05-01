@@ -163,8 +163,27 @@ async function calculateAndSaveGoals(req, res) {
       return;
     }
 
+    // CAL-21: resolve dynamic-vs-static mode + outcome before any compute.
+    // Pre-validate the combination so we 400 early on bad payloads, then
+    // re-resolve after computeTargetsV2 with the real calorie target so
+    // baselineGoal lands correctly in one atomic write below.
+    const { mode, outcome: outcomeOverride } = body;
+    try {
+      goalService.resolveGoalMode({ mode, outcome: outcomeOverride, calorieTarget: 0 });
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: e.message }));
+      return;
+    }
+
     // Calculate goals using v2 logic
     const result = goalService.computeTargetsV2(body);
+
+    const resolvedMode = goalService.resolveGoalMode({
+      mode,
+      outcome: outcomeOverride,
+      calorieTarget: result.calorie_target
+    });
 
     // Generate goal description
     const goalType = body.goal_type || 'maintain';
@@ -189,14 +208,19 @@ async function calculateAndSaveGoals(req, res) {
       goalDescription = `Maintain weight at ${currentWeight} kg`;
     }
 
-    // Save to user profile
+    // Save to user profile (CAL-21: write all 9 fields atomically — the 5
+    // legacy macro fields plus the 4 dynamic-goal fields).
     const { updateUser } = require('../models/user');
     const updatedUser = await updateUser(userId, {
       'goals.goal': goalDescription,
       'goals.dailyCalories': result.calorie_target,
       'goals.dailyProtein': result.macros.protein_g,
       'goals.dailyCarbs': result.macros.carb_g,
-      'goals.dailyFats': result.macros.fat_g
+      'goals.dailyFats': result.macros.fat_g,
+      'goals.goalType': resolvedMode.goalType,
+      'goals.intent': resolvedMode.intent,
+      'goals.outcome': resolvedMode.outcome,
+      'goals.baselineGoal': resolvedMode.baselineGoal
     });
 
     if (!updatedUser) {
@@ -208,7 +232,9 @@ async function calculateAndSaveGoals(req, res) {
       return;
     }
 
-    // Prepare response with planData
+    // Prepare response with planData. CAL-21: also echo the 4 resolved
+    // dynamic-goal fields so the client can render the home variant
+    // immediately without an extra GET /users/profile roundtrip.
     const response = {
       success: true,
       data: {
@@ -219,7 +245,11 @@ async function calculateAndSaveGoals(req, res) {
           protein: result.macros.protein_g,
           fat: result.macros.fat_g,
           carbs: result.macros.carb_g
-        }
+        },
+        goalType: resolvedMode.goalType,
+        intent: resolvedMode.intent,
+        outcome: resolvedMode.outcome,
+        baselineGoal: resolvedMode.baselineGoal
       },
       message: 'Goals calculated and saved successfully'
     };

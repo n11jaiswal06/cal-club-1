@@ -379,10 +379,14 @@ class AuthService {
     const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // 14 days
     await storeAuthToken(user._id, token, expiresAt);
 
+    // CAL-21: include goals so a fresh login already has the dynamic-vs-
+    // static display variant info — saves a separate GET /users/profile
+    // roundtrip on cold start.
     return {
       message: 'Firebase token verified successfully',
       token,
-      userId: user._id.toString()
+      userId: user._id.toString(),
+      goals: user.goals
     };
   }
 }
