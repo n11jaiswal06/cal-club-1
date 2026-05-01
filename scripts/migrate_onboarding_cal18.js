@@ -46,7 +46,7 @@ const Q10_GOAL_OPTIONS = [
   },
   {
     text: 'Build muscle while losing weight',
-    subtext: "Slower change, but no fat gain. Best if you've trained before.",
+    subtext: 'No change in weight. Lose fat and build muscle at the same time.',
     value: 'recomp',
   },
   {
@@ -255,6 +255,12 @@ async function migrate({ apply }) {
   }
 
   const goalSkipIfMaintainOnly = buildGoalSkipIf(goalQ._id, ['maintain']);
+  // Target weight + encouragement skip for both maintain AND recomp:
+  // recomp = "no change in weight", so a target weight is redundant and
+  // would let the user contradict their own goal (e.g. recomp + 60 kg
+  // target while currently 70 kg).
+  const goalSkipIfMaintainOrRecomp =
+      buildGoalSkipIf(goalQ._id, ['maintain', 'recomp']);
   const goalSkipIfNotLose = buildGoalSkipIf(goalQ._id, ['gain', 'recomp', 'maintain']);
   const goalSkipIfNotGain = buildGoalSkipIf(goalQ._id, ['lose', 'recomp', 'maintain']);
   const goalSkipIfNotRecomp = buildGoalSkipIf(goalQ._id, ['gain', 'lose', 'maintain']);
@@ -319,11 +325,11 @@ async function migrate({ apply }) {
 
   if (targetWeightQ) {
     ops.push({
-      label: 'Q11 target weight — skipIf maintain',
+      label: 'Q11 target weight — skipIf maintain or recomp',
       filter: { _id: targetWeightQ._id },
       update: {
         $set: {
-          skipIf: goalSkipIfMaintainOnly,
+          skipIf: goalSkipIfMaintainOrRecomp,
         },
       },
       upsert: false,
@@ -332,11 +338,11 @@ async function migrate({ apply }) {
 
   if (encouragementQ) {
     ops.push({
-      label: 'Q12 encouragement — skipIf maintain (copy assumes a target)',
+      label: 'Q12 encouragement — skipIf maintain or recomp (copy assumes a target)',
       filter: { _id: encouragementQ._id },
       update: {
         $set: {
-          skipIf: goalSkipIfMaintainOnly,
+          skipIf: goalSkipIfMaintainOrRecomp,
         },
       },
       upsert: false,
@@ -441,16 +447,18 @@ async function migrate({ apply }) {
   //    "re-run the script."
   console.log('\nApplying...');
   const session = await mongoose.startSession();
-  let usedTransaction = false;
   try {
     await session.withTransaction(async () => {
-      usedTransaction = true;
       for (const op of ops) {
         await runOp(op, session);
       }
     });
   } catch (err) {
-    if (!usedTransaction && isStandaloneTransactionError(err)) {
+    // The first op inside `withTransaction` is what raises the
+    // standalone-transaction error — at that point Mongo has aborted the
+    // (zero-applied) transaction, so the fallback can re-run every op
+    // safely. Idempotency comes from each op's filter+$set shape.
+    if (isStandaloneTransactionError(err)) {
       console.log(
         '  ℹ Standalone Mongo detected — transactions unavailable. Falling ' +
         'back to non-transactional apply. If this run fails mid-way, re-run ' +
