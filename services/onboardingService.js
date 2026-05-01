@@ -192,7 +192,7 @@ class OnboardingService {
           _id: notificationQuestionId,
           isActive: true
         })
-          .select('_id text subtext type options sequence image infoScreen skipIf')
+          .select('_id text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
           .lean();
         
         return question ? [question] : [];
@@ -225,6 +225,12 @@ class OnboardingService {
           '69f43aaf9c78fba92f5c08aa', // Loss rate preset (skipIf non-lose) — CAL-18
           '69f43aaf9c78fba92f5c08ab', // Gain rate preset (skipIf non-gain) — CAL-18
           '69f43aaf9c78fba92f5c08ac', // Recomp INFO_SCREEN (skipIf non-recomp) — CAL-18
+          // CAL-24: Dynamic Goal screens. Pinned _ids match the upsert filters
+          // in scripts/migrate_onboarding_cal24.js. Branching is governed by
+          // each question's skipIf rule against the choice question (14.1).
+          '69f43ca240000000000000a1', // Dynamic-vs-Static choice (CHOICE_PREVIEW) — CAL-24
+          '69f43ca240000000000000a3', // Health permission priming (skipIf static) — CAL-24
+          '69f43ca240000000000000a5', // Data import status (skipIf static) — CAL-24
         ].map(id => new mongoose.Types.ObjectId(id));
 
         // End questions (always last, in this order)
@@ -239,7 +245,7 @@ class OnboardingService {
           isActive: true
         })
           .sort({ sequence: 1 })
-          .select('_id text subtext type options sequence image infoScreen skipIf')
+          .select('_id text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
           .lean();
 
         // Fetch end questions
@@ -248,7 +254,7 @@ class OnboardingService {
           isActive: true
         })
           .sort({ sequence: 1 })
-          .select('_id text subtext type options sequence image infoScreen skipIf')
+          .select('_id text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
           .lean();
 
         // Combine: plan questions first, then end questions
@@ -258,7 +264,7 @@ class OnboardingService {
       // Default behavior: return all active questions
       return await Question.find({ isActive: true })
         .sort({ sequence: 1 })
-        .select('_id text subtext type options sequence image infoScreen skipIf');
+        .select('_id text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf');
     } catch (error) {
       throw new Error(`Failed to fetch active questions: ${error.message}`);
     }
