@@ -86,6 +86,65 @@ const infoScreenSchema = new mongoose.Schema({
   }]
 }, { _id: false });
 
+// CAL-24: structured payload for the Dynamic-vs-Static choice screen.
+// The four numeric values are fetched at render time from
+// POST /goals/choice-preview (see goalController.choicePreview); the seed
+// only carries the labels, the "recommended" tag, and the disclosure copy
+// from PRD §6.4. `options` follows optionSchema so the FE can keep its
+// existing select-style answer wiring (semantic value: 'dynamic' or 'static').
+const choicePreviewSchema = new mongoose.Schema({
+  endpoint: {
+    type: String,
+    trim: true,
+    default: '/goals/choice-preview'
+  },
+  staticLabel: { type: String, trim: true },
+  dynamicRestLabel: { type: String, trim: true },
+  dynamicActiveLabel: { type: String, trim: true },
+  dynamicWorkoutLabel: { type: String, trim: true },
+  recommendedValue: {
+    type: String,
+    trim: true,
+    enum: ['dynamic', 'static']
+  },
+  recommendedBadgeText: { type: String, trim: true },
+  disclosureHeading: { type: String, trim: true },
+  disclosureBody: { type: String, trim: true }
+}, { _id: false });
+
+// CAL-24: priming screen shown before invoking the system health-permission
+// sheet. Narrow-scope copy lives here; the actual permission request is
+// triggered by the FE on CTA press. `secondaryCtaText` lets the user opt
+// out before the system sheet appears; the FE chooses which `outcome`
+// enum to persist for that path (see CAL-26).
+const healthPermissionPrimingSchema = new mongoose.Schema({
+  heading: { type: String, trim: true },
+  body: { type: String, trim: true },
+  bullets: [{ type: String, trim: true }],
+  ctaText: { type: String, trim: true },
+  secondaryCtaText: { type: String, trim: true }
+}, { _id: false });
+
+// CAL-24: per-state copy block for the data-import status screen. The four
+// states correspond 1:1 with the User.goals.outcome enum (PRD §7 import
+// lifecycle): 'importing' is transient; 'success' → outcome=dynamic;
+// 'permissionDenied' → outcome=static_permission_denied; 'syncFailed' →
+// outcome=static_sync_failed. The FE flips between blocks based on the
+// real-world health-import lifecycle it observes; the seed never picks
+// which block to show.
+const dataImportStateCopySchema = new mongoose.Schema({
+  heading: { type: String, trim: true },
+  body: { type: String, trim: true },
+  ctaText: { type: String, trim: true }
+}, { _id: false });
+
+const dataImportSchema = new mongoose.Schema({
+  importing: dataImportStateCopySchema,
+  success: dataImportStateCopySchema,
+  permissionDenied: dataImportStateCopySchema,
+  syncFailed: dataImportStateCopySchema
+}, { _id: false });
+
 // One conditional rule that hides this question if the user's previously-
 // stored answer to `questionId` matches any value in `valueIn` (semantic) or
 // any text in `textIn` (display fallback). Multiple rules combine as OR.
@@ -134,6 +193,13 @@ const questionSchema = new mongoose.Schema({
       'NOTIFICATION_PERMISSION',
       'GOAL_CALCULATION',
       'INFO_SCREEN',
+      // CAL-24: Dynamic Goal onboarding screens. Each carries its own
+      // structured payload (choicePreview / healthPermissionPriming /
+      // dataImport) so the FE dispatches on type rather than guessing
+      // from metadata.
+      'CHOICE_PREVIEW',
+      'HEALTH_PERMISSION_PRIMING',
+      'DATA_IMPORT_STATUS',
       // Legacy types for backward compatibility
       'text',
       'number',
@@ -151,6 +217,10 @@ const questionSchema = new mongoose.Schema({
   options: [optionSchema],
   image: imageSchema,
   infoScreen: infoScreenSchema,
+  // CAL-24 sub-schemas — populated only on the matching `type`.
+  choicePreview: choicePreviewSchema,
+  healthPermissionPriming: healthPermissionPrimingSchema,
+  dataImport: dataImportSchema,
   skipIf: [skipIfSchema],
   sequence: {
     type: Number,
