@@ -209,15 +209,22 @@ class OnboardingService {
         // activity_level: What's your typical day like?
         // workouts_per_week: How many workouts do you do per week?
         // desired_weight_kg: What's your target weight (kg)?
+        // CAL-19: drop the deprecated SLIDER rate question and include the
+        // three CAL-18 server-driven questions (loss-rate, gain-rate, recomp
+        // info) so the Goal Settings sub-flow surfaces the new payload.
+        // Skipping is governed by each question's `skipIf` rules; the bloc
+        // walks them in `lib/blocs/onboarding/onboarding_skip_logic.dart`.
         const planCreationQuestionIds = [
-          '6908fe66896ccf24778c9075', // Choose your gender (sequence 4)
-          '6908fe66896ccf24778c9076', // How many workouts do you do per week? (sequence 5)
-          '6908fe66896ccf24778c9077', // What's your typical day like? (sequence 6)
-          '6908fe66896ccf24778c9079', // What's your height and weight? (sequence 8)
-          '6908fe66896ccf24778c907a', // What's your date of birth? (sequence 9)
-          '6908fe66896ccf24778c907d', // What is your goal? (sequence 12)
-          '6908fe66896ccf24778c907f', // What's your target weight (kg)? (sequence 14)
-          '6908fe66896ccf24778c9082', // How fast do you want to reach your goal? (sequence 17)
+          '6908fe66896ccf24778c9075', // Choose your gender
+          '6908fe66896ccf24778c9076', // How many workouts do you do per week?
+          '6908fe66896ccf24778c9077', // What's your typical day like?
+          '6908fe66896ccf24778c9079', // What's your height and weight?
+          '6908fe66896ccf24778c907a', // What's your date of birth?
+          '6908fe66896ccf24778c907d', // What's your primary goal? (CAL-18)
+          '6908fe66896ccf24778c907f', // What's your target weight (kg)? (skipIf maintain)
+          '69f43aaf9c78fba92f5c08aa', // Loss rate preset (skipIf non-lose) — CAL-18
+          '69f43aaf9c78fba92f5c08ab', // Gain rate preset (skipIf non-gain) — CAL-18
+          '69f43aaf9c78fba92f5c08ac', // Recomp INFO_SCREEN (skipIf non-recomp) — CAL-18
         ].map(id => new mongoose.Types.ObjectId(id));
 
         // End questions (always last, in this order)

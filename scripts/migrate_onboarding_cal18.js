@@ -46,7 +46,7 @@ const Q10_GOAL_OPTIONS = [
   },
   {
     text: 'Build muscle while losing weight',
-    subtext: "Slower change, but no fat gain. Best if you've trained before.",
+    subtext: 'No change in weight. Lose fat and build muscle at the same time.',
     value: 'recomp',
   },
   {
@@ -441,16 +441,18 @@ async function migrate({ apply }) {
   //    "re-run the script."
   console.log('\nApplying...');
   const session = await mongoose.startSession();
-  let usedTransaction = false;
   try {
     await session.withTransaction(async () => {
-      usedTransaction = true;
       for (const op of ops) {
         await runOp(op, session);
       }
     });
   } catch (err) {
-    if (!usedTransaction && isStandaloneTransactionError(err)) {
+    // The first op inside `withTransaction` is what raises the
+    // standalone-transaction error — at that point Mongo has aborted the
+    // (zero-applied) transaction, so the fallback can re-run every op
+    // safely. Idempotency comes from each op's filter+$set shape.
+    if (isStandaloneTransactionError(err)) {
       console.log(
         '  ℹ Standalone Mongo detected — transactions unavailable. Falling ' +
         'back to non-transactional apply. If this run fails mid-way, re-run ' +
