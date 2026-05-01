@@ -163,46 +163,48 @@ async function calculateAndSaveGoals(req, res) {
       return;
     }
 
-    // CAL-21: resolve dynamic-vs-static mode + outcome before any compute.
-    // Pre-validate the combination so we 400 early on bad payloads, then
-    // re-resolve after computeTargetsV2 with the real calorie target so
-    // baselineGoal lands correctly in one atomic write below.
+    // Calculate goals using v2 logic
+    const result = goalService.computeTargetsV2(body);
+
+    // CAL-21: resolve the dynamic-vs-static mode + outcome combo. Throws on
+    // invalid payloads (bad/missing mode, override on mode='static', invalid
+    // override value), which we surface as 400. Compute runs unconditionally
+    // first; the cost on a rejected payload is sub-millisecond and avoids a
+    // sentinel-value pre-validation pass.
     const { mode, outcome: outcomeOverride } = body;
+    let resolvedMode;
     try {
-      goalService.resolveGoalMode({ mode, outcome: outcomeOverride, calorieTarget: 0 });
+      resolvedMode = goalService.resolveGoalMode({
+        mode,
+        outcome: outcomeOverride,
+        calorieTarget: result.calorie_target
+      });
     } catch (e) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: e.message }));
       return;
     }
 
-    // Calculate goals using v2 logic
-    const result = goalService.computeTargetsV2(body);
-
-    const resolvedMode = goalService.resolveGoalMode({
-      mode,
-      outcome: outcomeOverride,
-      calorieTarget: result.calorie_target
-    });
-
-    // Generate goal description
-    const goalType = body.goal_type || 'maintain';
+    // Generate goal description. `weightGoalType` is the user's
+    // lose/gain/recomp/maintain choice; distinct from `resolvedMode.goalType`
+    // ('dynamic'|'static') which describes the home page display variant.
+    const weightGoalType = body.goal_type || 'maintain';
     const currentWeight = body.weight_kg;
     const targetWeight = body.desired_weight_kg || currentWeight;
     const pace = Math.abs(body.pace_kg_per_week);
-    
+
     let goalDescription = '';
-    if (goalType === 'lose') {
+    if (weightGoalType === 'lose') {
       const weeksToGoal = Math.ceil(Math.abs(targetWeight - currentWeight) / pace);
       const targetDate = new Date();
       targetDate.setDate(targetDate.getDate() + (weeksToGoal * 7));
       goalDescription = `Lose ${Math.abs(currentWeight - targetWeight).toFixed(1)} kg by ${targetDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}`;
-    } else if (goalType === 'gain') {
+    } else if (weightGoalType === 'gain') {
       const weeksToGoal = Math.ceil(Math.abs(targetWeight - currentWeight) / pace);
       const targetDate = new Date();
       targetDate.setDate(targetDate.getDate() + (weeksToGoal * 7));
       goalDescription = `Gain ${Math.abs(targetWeight - currentWeight).toFixed(1)} kg by ${targetDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}`;
-    } else if (goalType === 'recomp') {
+    } else if (weightGoalType === 'recomp') {
       goalDescription = `Recomp at ${currentWeight} kg`;
     } else {
       goalDescription = `Maintain weight at ${currentWeight} kg`;
