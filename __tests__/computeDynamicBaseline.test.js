@@ -9,6 +9,11 @@
 // published BMR exactly (note inline per case). For Example 2 the floor
 // binds, so any realistic male inputs that drive pre_floor below 1400
 // produce the same result — we use a normal 30/180/80 profile there.
+//
+// Note on Example 3: PRD §12 lists baseline 2246, but the algorithm
+// rounds to nearest 5 (so all four choice-screen numbers share a display
+// grid with the round-25 static value). Real result is 2245 — within
+// 1 kcal of the PRD figure. PR review fix.
 
 const goalService = require('../services/goalService');
 
@@ -44,9 +49,9 @@ describe('goalService.computeDynamicBaseline — PRD §12 worked examples', () =
     expect(result.pre_floor).toBeLessThan(1400);
   });
 
-  test('Example 3: 75kg man, gain 0.25%/wk → baseline 2246', () => {
-    // Need BMR≈1699.79 (so BMR×1.2 + 206.25 = 2246). Male: 6.25H - 5A = 944.79.
-    // age=30 → H=175.166.
+  test('Example 3: 75kg man, gain 0.25%/wk → baseline 2245 (PRD says 2246; rounded to nearest 5)', () => {
+    // Need BMR≈1699.79 (so BMR×1.2 + 206.25 = 2245.995). Male:
+    // 6.25H - 5A = 944.79. age=30 → H=175.166. round_to_5(2245.995) = 2245.
     const result = goalService.computeDynamicBaseline({
       sex_at_birth: 'male',
       age_years: 30,
@@ -55,7 +60,7 @@ describe('goalService.computeDynamicBaseline — PRD §12 worked examples', () =
       goal_type: 'gain',
       pace_kg_per_week: 0.1875, // 0.25% × 75kg
     });
-    expect(result.baseline).toBe(2246);
+    expect(result.baseline).toBe(2245);
     expect(result.floor_applied).toBe(false);
   });
 

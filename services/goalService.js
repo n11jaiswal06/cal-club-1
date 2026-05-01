@@ -33,10 +33,11 @@ class GoalService {
       PREVIEW_REST_STEPS: 3000,
       PREVIEW_ACTIVE_STEPS: 8000,
       PREVIEW_WORKOUT_KCAL: 250,            // illustrative 30-min workout
-      // Default activity_level for the static-row v2 calc when the caller
-      // hasn't yet asked the user (choice screen runs before the static
-      // lifestyle questions per PRD §8 / CAL-26 fallback routing). Mirrors
-      // the implicit default in computeTargetsV2.
+      // Static-row activity_level. The choice screen runs before the
+      // static lifestyle questions (PRD §8 / CAL-26 fallback routing), so
+      // the caller never has a real activity_level — we always pin this
+      // constant. Tunable here if telemetry shows users typically land
+      // somewhere other than 'active' in the static flow.
       PREVIEW_STATIC_ACTIVITY_LEVEL: 'active'
     };
   }
@@ -647,9 +648,15 @@ class GoalService {
 
     const pre_floor = sedentary_tdee + daily_kcal_delta;
     const floor = inputs.sex_at_birth === 'male' ? 1400 : 1200;
-    // Round to integer (NOT to nearest 25 like macros) so the choice-screen
-    // numbers match PRD §12 worked examples verbatim (e.g. 1295, 2246).
-    const baseline = Math.max(Math.round(pre_floor), floor);
+    // Round to nearest 5 so the four choice-screen numbers share a
+    // display grid: static is round-to-25 via computeTargetsV2's
+    // roundValues, the dynamic rows here round to 5, and the +150/+400/
+    // +525 offsets in computeChoicePreview keep the dynamic rows on the
+    // same 5-grid. Coarser than the macro round-to-25 (which would shift
+    // PRD §12 examples by up to 5) and finer than round-to-1 (which would
+    // strand the dynamic numbers on a different grid than static).
+    const pre_floor_rounded = Math.round(pre_floor / 5) * 5;
+    const baseline = Math.max(pre_floor_rounded, floor);
 
     return {
       rmr: Math.round(rmr),
@@ -657,7 +664,7 @@ class GoalService {
       daily_kcal_delta: Math.round(daily_kcal_delta),
       pre_floor: Math.round(pre_floor),
       floor,
-      floor_applied: Math.round(pre_floor) < floor,
+      floor_applied: pre_floor_rounded < floor,
       baseline
     };
   }
@@ -665,15 +672,20 @@ class GoalService {
   /**
    * CAL-22: Build the four numbers the Dynamic-vs-Static choice screen
    * renders (PRD §6.4, §7.5). The Static row uses `computeTargetsV2` with
-   * a default activity_level constant; the three Dynamic rows derive from
-   * the BMR×1.2 baseline plus illustrative step/workout assumptions.
+   * activity_level pinned to the PREVIEW_STATIC_ACTIVITY_LEVEL constant
+   * (the choice screen runs before the user has answered the static
+   * lifestyle questions, so any caller-supplied activity_level would be
+   * meaningless here). The three Dynamic rows derive from the BMR×1.2
+   * baseline plus illustrative step/workout assumptions.
    *
    * Caveat: a permission-denied user who later picks `sedentary` in the
    * static-lifestyle flow will see a slightly lower persisted static than
    * the choice-screen preview. Acceptable for v1 — preview is illustrative.
    *
-   * @param {Object} inputs - Same shape as computeDynamicBaseline +
-   *   optional v2 fields (activity_level, workouts_per_week, etc.).
+   * @param {Object} inputs - sex_at_birth, age_years, height_cm,
+   *   weight_kg, goal_type, pace_kg_per_week. Any v2-only fields
+   *   (activity_level, workouts_per_week, etc.) are ignored — the static
+   *   row pins activity_level to the constant for consistency.
    * @returns {Object} { static, dynamic_baseline, dynamic_rest,
    *   dynamic_active, dynamic_workout, meta }
    */
@@ -681,22 +693,29 @@ class GoalService {
     const baselineResult = this.computeDynamicBaseline(inputs);
     const { baseline, floor, floor_applied } = baselineResult;
 
-    // Static row: existing v2 calc with a default activity level when the
-    // caller hasn't asked the activity question yet.
-    const staticInputs = {
+    // Static row: pin activity_level + zero out workout fields so two
+    // requests with the same demographics always produce the same static
+    // value, regardless of whatever optional v2 fields the caller passes.
+    const staticResult = this.computeTargetsV2({
       ...inputs,
-      activity_level: inputs.activity_level || this.DYNAMIC.PREVIEW_STATIC_ACTIVITY_LEVEL
-    };
-    const staticResult = this.computeTargetsV2(staticInputs);
+      activity_level: this.DYNAMIC.PREVIEW_STATIC_ACTIVITY_LEVEL,
+      workouts_per_week: 0
+    });
 
-    const stepBonus = (steps) => steps * this.DYNAMIC.STEP_COEF;
-    const workoutBonus = (kcal) => kcal * this.DYNAMIC.WORKOUT_HAIRCUT;
-
-    const dynamic_rest = Math.round(baseline + stepBonus(this.DYNAMIC.PREVIEW_REST_STEPS));
-    const dynamic_active = Math.round(baseline + stepBonus(this.DYNAMIC.PREVIEW_ACTIVE_STEPS));
+    // baseline is already on the 5-grid (computeDynamicBaseline) and the
+    // step/workout offsets are integer multiples of 5 (3000×0.05=150,
+    // 8000×0.05=400, 250×0.5=125), so the sums stay on the 5-grid. The
+    // outer Math.round just cleans up any float drift from 0.05 × N.
+    const dynamic_rest = Math.round(
+      baseline + this.DYNAMIC.PREVIEW_REST_STEPS * this.DYNAMIC.STEP_COEF
+    );
+    const dynamic_active = Math.round(
+      baseline + this.DYNAMIC.PREVIEW_ACTIVE_STEPS * this.DYNAMIC.STEP_COEF
+    );
     const dynamic_workout = Math.round(
-      baseline + stepBonus(this.DYNAMIC.PREVIEW_ACTIVE_STEPS) +
-        workoutBonus(this.DYNAMIC.PREVIEW_WORKOUT_KCAL)
+      baseline +
+        this.DYNAMIC.PREVIEW_ACTIVE_STEPS * this.DYNAMIC.STEP_COEF +
+        this.DYNAMIC.PREVIEW_WORKOUT_KCAL * this.DYNAMIC.WORKOUT_HAIRCUT
     );
 
     return {
@@ -709,14 +728,14 @@ class GoalService {
         floor,
         floor_applied,
         // Surface assumptions so the client can render disclosure copy
-        // without duplicating constants. Tunable on the backend.
+        // (e.g. "assuming a 30-min, 250-cal workout") without duplicating
+        // constants. Tunable on the backend.
         assumptions: {
           rest_steps: this.DYNAMIC.PREVIEW_REST_STEPS,
           active_steps: this.DYNAMIC.PREVIEW_ACTIVE_STEPS,
           workout_kcal: this.DYNAMIC.PREVIEW_WORKOUT_KCAL,
           step_coef: this.DYNAMIC.STEP_COEF,
-          workout_haircut: this.DYNAMIC.WORKOUT_HAIRCUT,
-          static_activity_level: staticInputs.activity_level
+          workout_haircut: this.DYNAMIC.WORKOUT_HAIRCUT
         }
       }
     };

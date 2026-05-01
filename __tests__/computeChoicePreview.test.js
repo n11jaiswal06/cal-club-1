@@ -4,6 +4,10 @@
 // Dynamic-vs-Static choice screen renders. Same inputs as the
 // computeDynamicBaseline tests; here we additionally verify the three
 // dynamic rows (rest/active/workout) and the static row.
+//
+// Example 3 differs from PRD §12 by 1 kcal per row because the algorithm
+// rounds dynamic numbers to the nearest 5 to share a display grid with
+// the round-25 static value. PR review fix.
 
 const goalService = require('../services/goalService');
 
@@ -26,12 +30,12 @@ describe('goalService.computeChoicePreview — PRD §12 worked examples', () => 
       expected: { dynamic_baseline: 1400, dynamic_rest: 1550, dynamic_active: 1800, dynamic_workout: 1925 },
     },
     {
-      label: 'Example 3 — 75kg man, gain 0.25%/wk',
+      label: 'Example 3 — 75kg man, gain 0.25%/wk (PRD §12 ±1 due to round-to-5)',
       inputs: {
         sex_at_birth: 'male', age_years: 30, height_cm: 175.166, weight_kg: 75,
         goal_type: 'gain', pace_kg_per_week: 0.1875,
       },
-      expected: { dynamic_baseline: 2246, dynamic_rest: 2396, dynamic_active: 2646, dynamic_workout: 2771 },
+      expected: { dynamic_baseline: 2245, dynamic_rest: 2395, dynamic_active: 2645, dynamic_workout: 2770 },
     },
     {
       label: 'Example 4 — 65kg woman, recomp',
@@ -62,27 +66,20 @@ describe('goalService.computeChoicePreview — invariants', () => {
     expect(result.static).toBeLessThanOrEqual(result.dynamic_workout);
   });
 
-  test('default static activity_level applies when caller omits it', () => {
-    // The choice screen runs before the static-lifestyle questions, so the
-    // caller typically won't have activity_level. The endpoint must default
-    // to a sensible constant rather than throw.
-    const inputs = {
+  test('caller-supplied activity_level / workouts_per_week are ignored (static row pinned)', () => {
+    // The choice screen runs before the static lifestyle questions, so we
+    // pin activity_level and workouts_per_week internally to keep the
+    // static row deterministic across requests with the same demographics.
+    const base = {
       sex_at_birth: 'male', age_years: 30, height_cm: 180, weight_kg: 80,
       goal_type: 'maintain', pace_kg_per_week: 0,
     };
-    const result = goalService.computeChoicePreview(inputs);
-    expect(result.meta.assumptions.static_activity_level).toBe('active');
-    expect(typeof result.static).toBe('number');
-  });
-
-  test('explicit activity_level overrides the default', () => {
-    const inputs = {
-      sex_at_birth: 'male', age_years: 30, height_cm: 180, weight_kg: 80,
-      goal_type: 'maintain', pace_kg_per_week: 0,
-      activity_level: 'sedentary',
-    };
-    const result = goalService.computeChoicePreview(inputs);
-    expect(result.meta.assumptions.static_activity_level).toBe('sedentary');
+    const a = goalService.computeChoicePreview(base);
+    const b = goalService.computeChoicePreview({
+      ...base, activity_level: 'sedentary', workouts_per_week: 7,
+    });
+    expect(b.static).toBe(a.static);
+    expect(b.dynamic_baseline).toBe(a.dynamic_baseline);
   });
 
   test('meta surfaces tunable assumptions for client disclosure copy', () => {
@@ -96,7 +93,6 @@ describe('goalService.computeChoicePreview — invariants', () => {
       workout_kcal: 250,
       step_coef: 0.05,
       workout_haircut: 0.5,
-      static_activity_level: 'active',
     });
     expect(result.meta.floor).toBe(1200);
     expect(result.meta.floor_applied).toBe(false);
