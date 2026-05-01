@@ -174,6 +174,12 @@ async function calculateAndSaveGoals(req, res) {
     // sub-millisecond cost rationale as the resolveGoalMode block below.
     const dynBaseline = goalService.computeDynamicBaseline(body);
 
+    // CAL-23: persist RMR for the daily-flex math (workout bonus needs
+    // BMR-during-workout = rmr/1440 × duration). computeDynamicBaseline
+    // already returns rmr rounded; pulling from there avoids a redundant
+    // calculateRMR call.
+    const rmr = dynBaseline.rmr;
+
     // CAL-21: resolve the dynamic-vs-static mode + outcome combo. Throws on
     // invalid payloads (bad/missing mode, override on mode='static', invalid
     // override value), which we surface as 400. Compute runs unconditionally
@@ -231,7 +237,8 @@ async function calculateAndSaveGoals(req, res) {
       'goals.goalType': resolvedMode.goalType,
       'goals.intent': resolvedMode.intent,
       'goals.outcome': resolvedMode.outcome,
-      'goals.baselineGoal': resolvedMode.baselineGoal
+      'goals.baselineGoal': resolvedMode.baselineGoal,
+      'goals.rmr': rmr
     });
 
     if (!updatedUser) {

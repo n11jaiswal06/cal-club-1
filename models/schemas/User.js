@@ -101,6 +101,18 @@ const userSchema = new mongoose.Schema({
       type: Number,
       min: 0,
       max: 10000
+    },
+    // CAL-23: cached Mifflin-St Jeor RMR (kcal/day) at goal-save time.
+    // Demographics (sex/age/height) live in UserQuestion answers and are
+    // not directly indexable by name from the User doc, so we persist the
+    // already-computed RMR here for the daily-flex math (workout bonus
+    // subtracts BMR-during-workout = rmr/1440 × duration). Refreshed on
+    // every /goals/calculate-and-save; users who haven't re-saved goals
+    // post-rollout simply won't see the dynamicGoal block until they do.
+    rmr: {
+      type: Number,
+      min: 0,
+      max: 10000
     }
   },
   isActive: {
