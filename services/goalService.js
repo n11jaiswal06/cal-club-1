@@ -21,6 +21,25 @@ class GoalService {
       'standing': 0.25,
       'labor': 0.35
     };
+
+    // CAL-22: Dynamic-goal constants (PRD §7.3, §7.4, §7.5).
+    // Tunable here so the choice-screen example numbers and bonus
+    // coefficients can be adjusted without an app release.
+    this.DYNAMIC = {
+      SEDENTARY_MULTIPLIER: 1.2,            // PRD §7.3
+      STEP_COEF: 0.05,                      // kcal/step, PRD §7.4 (CAL-17 audit)
+      WORKOUT_HAIRCUT: 0.5,                 // 50% net of workout cal, PRD §7.4
+      // Choice-screen illustrative assumptions (PRD §7.5)
+      PREVIEW_REST_STEPS: 3000,
+      PREVIEW_ACTIVE_STEPS: 8000,
+      PREVIEW_WORKOUT_KCAL: 250,            // illustrative 30-min workout
+      // Static-row activity_level. The choice screen runs before the
+      // static lifestyle questions (PRD §8 / CAL-26 fallback routing), so
+      // the caller never has a real activity_level — we always pin this
+      // constant. Tunable here if telemetry shows users typically land
+      // somewhere other than 'active' in the static flow.
+      PREVIEW_STATIC_ACTIVITY_LEVEL: 'active'
+    };
   }
 
   /**
@@ -588,26 +607,169 @@ class GoalService {
   }
 
   /**
+   * CAL-22: Dynamic-goal baseline calculation (PRD §7.3).
+   *
+   * Distinct from `computeTargetsV2`: uses the sedentary multiplier (1.2)
+   * with NO activity-level NEAT, NO EAT for workouts. Activity is added
+   * separately as a daily flex (CAL-23). Producing two different "baseline"
+   * numbers is intentional — a Dynamic user's persisted baseline must not
+   * already include activity, otherwise CAL-23's `today = baseline + bonus`
+   * double-counts.
+   *
+   * Mirrors `computeTargetsV2`'s recomp coercion (services/goalService.js
+   * pace-for-recomp clause) and floor (1400 male / 1200 female).
+   *
+   * @param {Object} inputs
+   *   sex_at_birth, age_years, height_cm, weight_kg, goal_type,
+   *   pace_kg_per_week
+   * @returns {{rmr:number, sedentary_tdee:number, daily_kcal_delta:number,
+   *           pre_floor:number, floor:number, floor_applied:boolean,
+   *           baseline:number}}
+   */
+  computeDynamicBaseline(inputs) {
+    const required = ['sex_at_birth', 'age_years', 'height_cm', 'weight_kg', 'goal_type', 'pace_kg_per_week'];
+    for (const field of required) {
+      if (inputs[field] === undefined || inputs[field] === null) {
+        throw new Error(`Missing required field: ${field}`);
+      }
+    }
+
+    const rmr = this.calculateRMR({
+      sex_at_birth: inputs.sex_at_birth,
+      age_years: inputs.age_years,
+      height_cm: inputs.height_cm,
+      weight_kg: inputs.weight_kg
+    });
+    const sedentary_tdee = rmr * this.DYNAMIC.SEDENTARY_MULTIPLIER;
+
+    // PRD §6.2: recomp is maintenance kcal regardless of pace.
+    const paceForCalc = inputs.goal_type === 'recomp' ? 0 : inputs.pace_kg_per_week;
+    const daily_kcal_delta = (paceForCalc * this.KCAL_PER_KG_WEEK) / 7;
+
+    const pre_floor = sedentary_tdee + daily_kcal_delta;
+    const floor = inputs.sex_at_birth === 'male' ? 1400 : 1200;
+    // Round to nearest 5 so the four choice-screen numbers share a
+    // display grid: static is round-to-25 via computeTargetsV2's
+    // roundValues, the dynamic rows here round to 5, and the +150/+400/
+    // +525 offsets in computeChoicePreview keep the dynamic rows on the
+    // same 5-grid. Coarser than the macro round-to-25 (which would shift
+    // PRD §12 examples by up to 5) and finer than round-to-1 (which would
+    // strand the dynamic numbers on a different grid than static).
+    const pre_floor_rounded = Math.round(pre_floor / 5) * 5;
+    const baseline = Math.max(pre_floor_rounded, floor);
+
+    return {
+      rmr: Math.round(rmr),
+      sedentary_tdee: Math.round(sedentary_tdee),
+      daily_kcal_delta: Math.round(daily_kcal_delta),
+      pre_floor: Math.round(pre_floor),
+      floor,
+      floor_applied: pre_floor_rounded < floor,
+      baseline
+    };
+  }
+
+  /**
+   * CAL-22: Build the four numbers the Dynamic-vs-Static choice screen
+   * renders (PRD §6.4, §7.5). The Static row uses `computeTargetsV2` with
+   * activity_level pinned to the PREVIEW_STATIC_ACTIVITY_LEVEL constant
+   * (the choice screen runs before the user has answered the static
+   * lifestyle questions, so any caller-supplied activity_level would be
+   * meaningless here). The three Dynamic rows derive from the BMR×1.2
+   * baseline plus illustrative step/workout assumptions.
+   *
+   * Caveat: a permission-denied user who later picks `sedentary` in the
+   * static-lifestyle flow will see a slightly lower persisted static than
+   * the choice-screen preview. Acceptable for v1 — preview is illustrative.
+   *
+   * @param {Object} inputs - sex_at_birth, age_years, height_cm,
+   *   weight_kg, goal_type, pace_kg_per_week. Any v2-only fields
+   *   (activity_level, workouts_per_week, etc.) are ignored — the static
+   *   row pins activity_level to the constant for consistency.
+   * @returns {Object} { static, dynamic_baseline, dynamic_rest,
+   *   dynamic_active, dynamic_workout, meta }
+   */
+  computeChoicePreview(inputs) {
+    const baselineResult = this.computeDynamicBaseline(inputs);
+    const { baseline, floor, floor_applied } = baselineResult;
+
+    // Static row: pin activity_level + zero out workout fields so two
+    // requests with the same demographics always produce the same static
+    // value, regardless of whatever optional v2 fields the caller passes.
+    const staticResult = this.computeTargetsV2({
+      ...inputs,
+      activity_level: this.DYNAMIC.PREVIEW_STATIC_ACTIVITY_LEVEL,
+      workouts_per_week: 0
+    });
+
+    // baseline is already on the 5-grid (computeDynamicBaseline) and the
+    // step/workout offsets are integer multiples of 5 (3000×0.05=150,
+    // 8000×0.05=400, 250×0.5=125), so the sums stay on the 5-grid. The
+    // outer Math.round just cleans up any float drift from 0.05 × N.
+    const dynamic_rest = Math.round(
+      baseline + this.DYNAMIC.PREVIEW_REST_STEPS * this.DYNAMIC.STEP_COEF
+    );
+    const dynamic_active = Math.round(
+      baseline + this.DYNAMIC.PREVIEW_ACTIVE_STEPS * this.DYNAMIC.STEP_COEF
+    );
+    const dynamic_workout = Math.round(
+      baseline +
+        this.DYNAMIC.PREVIEW_ACTIVE_STEPS * this.DYNAMIC.STEP_COEF +
+        this.DYNAMIC.PREVIEW_WORKOUT_KCAL * this.DYNAMIC.WORKOUT_HAIRCUT
+    );
+
+    return {
+      static: staticResult.calorie_target,
+      dynamic_baseline: baseline,
+      dynamic_rest,
+      dynamic_active,
+      dynamic_workout,
+      meta: {
+        floor,
+        floor_applied,
+        // Surface assumptions so the client can render disclosure copy
+        // (e.g. "assuming a 30-min, 250-cal workout") without duplicating
+        // constants. Tunable on the backend.
+        assumptions: {
+          rest_steps: this.DYNAMIC.PREVIEW_REST_STEPS,
+          active_steps: this.DYNAMIC.PREVIEW_ACTIVE_STEPS,
+          workout_kcal: this.DYNAMIC.PREVIEW_WORKOUT_KCAL,
+          step_coef: this.DYNAMIC.STEP_COEF,
+          workout_haircut: this.DYNAMIC.WORKOUT_HAIRCUT
+        }
+      }
+    };
+  }
+
+  /**
    * CAL-21: Resolve the user's Dynamic-vs-Static intent into the four
    * persisted fields (goalType, intent, outcome, baselineGoal).
    *
    * intent and outcome are independent so a future "re-enable Dynamic"
    * prompt can target users with intent=dynamic AND outcome != 'dynamic'.
-   * baselineGoal is always the static-equivalent calorie target — it is
-   * persisted even on Dynamic so the daily flex calc has a baseline, and
-   * it is persisted on the static-fallback paths so re-enabling Dynamic
-   * later does not require a fresh recalculation.
+   *
+   * baselineGoal semantics (CAL-22):
+   *   • mode='static' — uses calorieTarget (the v2 result with NEAT). For
+   *     static users this is documentational; nothing reads baselineGoal.
+   *   • mode='dynamic' (any outcome, including permission-denied fallbacks
+   *     where intent stays 'dynamic') — uses dynamicBaseline (BMR×1.2 ±
+   *     delta, floored). CAL-23 reads baselineGoal and adds activity bonus
+   *     on top, so it must be the bonus-free dynamic baseline. Persisting
+   *     it on fallback paths means a future re-enable-Dynamic prompt can
+   *     fire without forcing a fresh calculation.
    *
    * @param {Object} params
    * @param {'dynamic'|'static'} params.mode - User's choice at the picker.
    * @param {string} [params.outcome] - Optional override; only valid when
    *   mode='dynamic'. Accepts 'static_permission_denied' (HealthKit denied)
    *   or 'static_sync_failed' (HealthKit reachable but sync errored).
-   * @param {number} params.calorieTarget - The freshly calculated target.
+   * @param {number} params.calorieTarget - The v2 calorie target.
+   * @param {number} params.dynamicBaseline - The BMR×1.2 dynamic baseline.
+   *   Required for mode='dynamic'; ignored for mode='static'.
    * @returns {{goalType:string,intent:string,outcome:string,baselineGoal:number}}
    * @throws {Error} on invalid mode / outcome combination.
    */
-  resolveGoalMode({ mode, outcome, calorieTarget }) {
+  resolveGoalMode({ mode, outcome, calorieTarget, dynamicBaseline }) {
     if (mode !== 'dynamic' && mode !== 'static') {
       throw new Error("mode must be 'dynamic' or 'static'");
     }
@@ -622,13 +784,16 @@ class GoalService {
         baselineGoal: calorieTarget
       };
     }
-    // mode === 'dynamic'
+    // mode === 'dynamic' — baselineGoal is always the BMR×1.2 baseline.
+    if (dynamicBaseline === undefined || dynamicBaseline === null) {
+      throw new Error("dynamicBaseline is required when mode='dynamic'");
+    }
     if (outcome === undefined) {
       return {
         goalType: 'dynamic',
         intent: 'dynamic',
         outcome: 'dynamic',
-        baselineGoal: calorieTarget
+        baselineGoal: dynamicBaseline
       };
     }
     if (outcome === 'static_permission_denied' || outcome === 'static_sync_failed') {
@@ -636,7 +801,7 @@ class GoalService {
         goalType: 'static',
         intent: 'dynamic',
         outcome,
-        baselineGoal: calorieTarget
+        baselineGoal: dynamicBaseline
       };
     }
     throw new Error(

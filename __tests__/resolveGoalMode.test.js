@@ -1,5 +1,13 @@
-// Tests for goalService.resolveGoalMode (CAL-21).
-// Covers each row of the resolution table plus rejected combinations.
+// Tests for goalService.resolveGoalMode (CAL-21, updated by CAL-22).
+//
+// CAL-22 changed the baselineGoal semantics:
+//   • mode='static' resolutions still take baselineGoal from calorieTarget
+//     (the v2 result with NEAT) — documentational, nothing reads it.
+//   • mode='dynamic' resolutions (including permission-denied fallbacks)
+//     now take baselineGoal from the new dynamicBaseline param (BMR×1.2 ±
+//     delta, floored). CAL-23's daily-flex math adds activity bonus on top
+//     of baselineGoal, so it must be the bonus-free dynamic baseline to
+//     avoid double-counting.
 
 const goalService = require('../services/goalService');
 
@@ -16,62 +24,70 @@ describe('goalService.resolveGoalMode', () => {
       });
     });
 
-    test("mode='dynamic' (no override) resolves to all-dynamic", () => {
+    test("mode='dynamic' (no override) resolves to all-dynamic with dynamicBaseline as baselineGoal", () => {
       expect(
-        goalService.resolveGoalMode({ mode: 'dynamic', calorieTarget: 2350 })
+        goalService.resolveGoalMode({
+          mode: 'dynamic',
+          calorieTarget: 2350,
+          dynamicBaseline: 1900,
+        })
       ).toEqual({
         goalType: 'dynamic',
         intent: 'dynamic',
         outcome: 'dynamic',
-        baselineGoal: 2350,
+        baselineGoal: 1900,
       });
     });
 
-    test("mode='dynamic' + permission_denied keeps intent=dynamic, applies static", () => {
+    test("mode='dynamic' + permission_denied keeps intent=dynamic, baselineGoal=dynamicBaseline", () => {
       expect(
         goalService.resolveGoalMode({
           mode: 'dynamic',
           outcome: 'static_permission_denied',
           calorieTarget: 1800,
+          dynamicBaseline: 1500,
         })
       ).toEqual({
         goalType: 'static',
         intent: 'dynamic',
         outcome: 'static_permission_denied',
-        baselineGoal: 1800,
+        baselineGoal: 1500,
       });
     });
 
-    test("mode='dynamic' + sync_failed keeps intent=dynamic, applies static", () => {
+    test("mode='dynamic' + sync_failed keeps intent=dynamic, baselineGoal=dynamicBaseline", () => {
       expect(
         goalService.resolveGoalMode({
           mode: 'dynamic',
           outcome: 'static_sync_failed',
           calorieTarget: 1900,
+          dynamicBaseline: 1620,
         })
       ).toEqual({
         goalType: 'static',
         intent: 'dynamic',
         outcome: 'static_sync_failed',
-        baselineGoal: 1900,
+        baselineGoal: 1620,
       });
     });
 
-    test('baselineGoal mirrors calorieTarget across all paths', () => {
-      // Smoke check that baselineGoal === input.calorieTarget for each
-      // resolved row, regardless of which goalType is applied. This is the
-      // PRD §8 invariant that lets a future re-enable-Dynamic prompt fire
-      // without forcing a recalculation.
-      const target = 2222;
-      const cases = [
-        { mode: 'static' },
+    test("baselineGoal source is mode-dependent: static→calorieTarget, dynamic→dynamicBaseline", () => {
+      // Distinct numbers so we can prove which source each branch uses.
+      const calorieTarget = 2222;
+      const dynamicBaseline = 1295;
+
+      expect(
+        goalService.resolveGoalMode({ mode: 'static', calorieTarget }).baselineGoal
+      ).toBe(calorieTarget);
+
+      const dynamicCases = [
         { mode: 'dynamic' },
         { mode: 'dynamic', outcome: 'static_permission_denied' },
         { mode: 'dynamic', outcome: 'static_sync_failed' },
       ];
-      for (const c of cases) {
-        const r = goalService.resolveGoalMode({ ...c, calorieTarget: target });
-        expect(r.baselineGoal).toBe(target);
+      for (const c of dynamicCases) {
+        const r = goalService.resolveGoalMode({ ...c, calorieTarget, dynamicBaseline });
+        expect(r.baselineGoal).toBe(dynamicBaseline);
       }
     });
   });
@@ -99,6 +115,15 @@ describe('goalService.resolveGoalMode', () => {
       ).toThrow(/only valid when mode='dynamic'/);
     });
 
+    test("mode='dynamic' without dynamicBaseline throws (CAL-22)", () => {
+      // dynamicBaseline is mandatory on the dynamic path now — protects
+      // against silently persisting an undefined baselineGoal that would
+      // break CAL-23's daily-flex math.
+      expect(() =>
+        goalService.resolveGoalMode({ mode: 'dynamic', calorieTarget: 2000 })
+      ).toThrow(/dynamicBaseline is required/);
+    });
+
     test("mode='dynamic' with outcome='dynamic' is rejected (not a valid override value)", () => {
       // 'dynamic' is the implicit happy-path outcome — clients must omit
       // outcome rather than send it explicitly. Catches a likely client bug.
@@ -107,6 +132,7 @@ describe('goalService.resolveGoalMode', () => {
           mode: 'dynamic',
           outcome: 'dynamic',
           calorieTarget: 2000,
+          dynamicBaseline: 1500,
         })
       ).toThrow(/outcome override must be/);
     });
@@ -119,6 +145,7 @@ describe('goalService.resolveGoalMode', () => {
           mode: 'dynamic',
           outcome: 'static_chosen',
           calorieTarget: 2000,
+          dynamicBaseline: 1500,
         })
       ).toThrow(/outcome override must be/);
     });
@@ -129,6 +156,7 @@ describe('goalService.resolveGoalMode', () => {
           mode: 'dynamic',
           outcome: 'whatever',
           calorieTarget: 2000,
+          dynamicBaseline: 1500,
         })
       ).toThrow(/outcome override must be/);
     });

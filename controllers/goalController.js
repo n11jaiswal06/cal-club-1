@@ -166,6 +166,14 @@ async function calculateAndSaveGoals(req, res) {
     // Calculate goals using v2 logic
     const result = goalService.computeTargetsV2(body);
 
+    // CAL-22: also compute the BMR×1.2 dynamic baseline so that when
+    // mode='dynamic' (or mode='dynamic' + permission-denied fallback) the
+    // persisted baselineGoal is the bonus-free baseline that CAL-23's
+    // daily-flex math can add activity bonus to without double-counting.
+    // computeDynamicBaseline reuses validateInputs-checked fields; same
+    // sub-millisecond cost rationale as the resolveGoalMode block below.
+    const dynBaseline = goalService.computeDynamicBaseline(body);
+
     // CAL-21: resolve the dynamic-vs-static mode + outcome combo. Throws on
     // invalid payloads (bad/missing mode, override on mode='static', invalid
     // override value), which we surface as 400. Compute runs unconditionally
@@ -177,7 +185,8 @@ async function calculateAndSaveGoals(req, res) {
       resolvedMode = goalService.resolveGoalMode({
         mode,
         outcome: outcomeOverride,
-        calorieTarget: result.calorie_target
+        calorieTarget: result.calorie_target,
+        dynamicBaseline: dynBaseline.baseline
       });
     } catch (e) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -278,8 +287,69 @@ async function calculateAndSaveGoals(req, res) {
   }
 }
 
+/**
+ * CAL-22: Dynamic-vs-Static choice screen preview.
+ * POST /goals/choice-preview
+ *
+ * Read-only — same auth posture as /goals/calculate and /goals/calculate/v2
+ * (unauthenticated, exempted in middleware/auth.js). Returns the four
+ * personalized numbers the choice screen renders.
+ */
+async function choicePreview(req, res) {
+  try {
+    const body = await new Promise((resolve, reject) => {
+      parseBody(req, (err, data) => {
+        if (err) reject(err);
+        else resolve(data);
+      });
+    });
+
+    console.log('Choice-preview request:', JSON.stringify(body, null, 2));
+
+    const validation = goalService.validateInputs(body);
+    if (!validation.valid) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: false,
+        error: 'Invalid input parameters',
+        validation: {
+          valid: false,
+          errors: validation.errors,
+          warnings: validation.warnings
+        }
+      }));
+      return;
+    }
+
+    const result = goalService.computeChoicePreview(body);
+
+    if (validation.warnings.length > 0) {
+      result.warnings = validation.warnings;
+    }
+
+    console.log('Choice-preview result:', JSON.stringify(result, null, 2));
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: true,
+      data: result
+    }));
+
+  } catch (error) {
+    reportError(error, { req });
+    console.error('Error computing choice preview:', error);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: false,
+      error: 'Failed to compute choice preview',
+      details: error.message
+    }));
+  }
+}
+
 module.exports = {
   calculateGoals,
   calculateGoalsV2,
-  calculateAndSaveGoals
+  calculateAndSaveGoals,
+  choicePreview
 };
