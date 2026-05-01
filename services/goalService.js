@@ -586,6 +586,63 @@ class GoalService {
       warnings
     };
   }
+
+  /**
+   * CAL-21: Resolve the user's Dynamic-vs-Static intent into the four
+   * persisted fields (goalType, intent, outcome, baselineGoal).
+   *
+   * intent and outcome are independent so a future "re-enable Dynamic"
+   * prompt can target users with intent=dynamic AND outcome != 'dynamic'.
+   * baselineGoal is always the static-equivalent calorie target — it is
+   * persisted even on Dynamic so the daily flex calc has a baseline, and
+   * it is persisted on the static-fallback paths so re-enabling Dynamic
+   * later does not require a fresh recalculation.
+   *
+   * @param {Object} params
+   * @param {'dynamic'|'static'} params.mode - User's choice at the picker.
+   * @param {string} [params.outcome] - Optional override; only valid when
+   *   mode='dynamic'. Accepts 'static_permission_denied' (HealthKit denied)
+   *   or 'static_sync_failed' (HealthKit reachable but sync errored).
+   * @param {number} params.calorieTarget - The freshly calculated target.
+   * @returns {{goalType:string,intent:string,outcome:string,baselineGoal:number}}
+   * @throws {Error} on invalid mode / outcome combination.
+   */
+  resolveGoalMode({ mode, outcome, calorieTarget }) {
+    if (mode !== 'dynamic' && mode !== 'static') {
+      throw new Error("mode must be 'dynamic' or 'static'");
+    }
+    if (mode === 'static') {
+      if (outcome !== undefined) {
+        throw new Error("outcome override is only valid when mode='dynamic'");
+      }
+      return {
+        goalType: 'static',
+        intent: 'static',
+        outcome: 'static_chosen',
+        baselineGoal: calorieTarget
+      };
+    }
+    // mode === 'dynamic'
+    if (outcome === undefined) {
+      return {
+        goalType: 'dynamic',
+        intent: 'dynamic',
+        outcome: 'dynamic',
+        baselineGoal: calorieTarget
+      };
+    }
+    if (outcome === 'static_permission_denied' || outcome === 'static_sync_failed') {
+      return {
+        goalType: 'static',
+        intent: 'dynamic',
+        outcome,
+        baselineGoal: calorieTarget
+      };
+    }
+    throw new Error(
+      "outcome override must be 'static_permission_denied' or 'static_sync_failed'"
+    );
+  }
 }
 
 module.exports = new GoalService();
