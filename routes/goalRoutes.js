@@ -3,7 +3,8 @@ const goalController = require('../controllers/goalController');
 const routes = {
   'POST /goals/calculate': goalController.calculateGoals,
   'POST /goals/calculate/v2': goalController.calculateGoalsV2,
-  'POST /goals/calculate-and-save': goalController.calculateAndSaveGoals
+  'POST /goals/calculate-and-save': goalController.calculateAndSaveGoals,
+  'POST /goals/choice-preview': goalController.choicePreview
 };
 
 function goalRoutes(req, res) {
