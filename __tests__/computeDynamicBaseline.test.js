@@ -95,13 +95,14 @@ describe('goalService.computeDynamicBaseline — invariants', () => {
     expect(female.floor).toBe(1200);
   });
 
-  test('uses sedentary multiplier 1.2, not v2 NEAT multipliers', () => {
-    // Same inputs through both: dynamic baseline must be lower than v2
-    // calorie target (which adds NEAT for activity_level + EAT for workouts).
+  test('uses sedentary multiplier 1.2 (independent of v2 activity-band path)', () => {
+    // The dynamic baseline path is fixed at BMR×1.2; v2 uses ACTIVITY_MULTIPLIERS
+    // and produces a higher number for any band above sedentary. Compare against
+    // moderately_active (1.55) — the v2 default for the static fallback.
     const inputs = {
       sex_at_birth: 'male', age_years: 30, height_cm: 180, weight_kg: 80,
       goal_type: 'maintain', pace_kg_per_week: 0,
-      activity_level: 'active', workouts_per_week: 3, avg_workout_duration_min: 45, avg_workout_intensity: 'moderate',
+      activity_level: 'moderately_active',
     };
     const dyn = goalService.computeDynamicBaseline(inputs);
     const v2 = goalService.computeTargetsV2(inputs);
