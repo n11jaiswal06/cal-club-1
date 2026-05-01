@@ -292,6 +292,46 @@ async function migrate({ apply }) {
     if (rateQ) q13By = 'fingerprint=options match /0.X kg/';
   }
   if (!rateQ) q13By = 'not-found';
+
+  // Old SLIDER rate question (e.g. "How fast do you want to reach
+  // your goal?"). Distinct from `rateQ` above, which targets the
+  // SELECT-type 0.X-kg-options variant. SLIDER has no options array
+  // to fingerprint, so we look it up by known _id, then by canonical
+  // text + type, then by being the only active SLIDER as a last
+  // resort. Skipped if already-deactivated (idempotent re-runs).
+  let oldSliderRateQ = null;
+  let qSliderBy = 'not-found';
+  {
+    const PINNED_OLD_SLIDER_ID = '6908fe66896ccf24778c9082';
+    let q;
+    if (mongoose.isValidObjectId(PINNED_OLD_SLIDER_ID)) {
+      q = await Question.findById(PINNED_OLD_SLIDER_ID);
+    }
+    if (q && q.type === 'SLIDER' && q.isActive !== false) {
+      oldSliderRateQ = q;
+      qSliderBy = 'pinned-id';
+    } else {
+      q = await Question.findOne({
+        type: 'SLIDER',
+        isActive: { $ne: false },
+        text: { $regex: 'how fast.*reach.*goal', $options: 'is' },
+      });
+      if (q) {
+        oldSliderRateQ = q;
+        qSliderBy = 'type=SLIDER+text=/how fast.*reach.*goal/is';
+      } else {
+        q = await Question.findOne({
+          type: 'SLIDER',
+          isActive: { $ne: false },
+        });
+        if (q) {
+          oldSliderRateQ = q;
+          qSliderBy = 'type=SLIDER (sole active match)';
+        }
+      }
+    }
+  }
+
   console.log(
     `Q11 (target weight) located via ${q11By}: ` +
     (targetWeightQ ? `_id=${targetWeightQ._id}, seq=${targetWeightQ.sequence}, "${targetWeightQ.text}"` : 'NOT FOUND — will skip Q11 op')
@@ -303,6 +343,12 @@ async function migrate({ apply }) {
   console.log(
     `Q13 (weekly rate) located via ${q13By}: ` +
     (rateQ ? `_id=${rateQ._id}, seq=${rateQ.sequence}, "${rateQ.text}"` : 'NOT FOUND — will skip Q13 update; only insert Q13b/Q13c')
+  );
+  console.log(
+    `Q-old-SLIDER (deprecated weekly rate) located via ${qSliderBy}: ` +
+    (oldSliderRateQ
+      ? `_id=${oldSliderRateQ._id}, seq=${oldSliderRateQ.sequence}, "${oldSliderRateQ.text}"`
+      : 'NOT FOUND — no SLIDER rate to deactivate (acceptable on already-migrated DBs).')
   );
   console.log('');
 
@@ -373,6 +419,19 @@ async function migrate({ apply }) {
     ops.push({
       label: `Deactivate old rate question (_id=${rateQ._id}, seq=${rateQ.sequence}, "${rateQ.text}")`,
       filter: { _id: rateQ._id },
+      update: {
+        $set: {
+          isActive: false,
+        },
+      },
+      upsert: false,
+    });
+  }
+
+  if (oldSliderRateQ) {
+    ops.push({
+      label: `Deactivate old SLIDER rate question (_id=${oldSliderRateQ._id}, "${oldSliderRateQ.text}")`,
+      filter: { _id: oldSliderRateQ._id },
       update: {
         $set: {
           isActive: false,
