@@ -214,7 +214,21 @@ class OnboardingService {
         // info) so the Goal Settings sub-flow surfaces the new payload.
         // Skipping is governed by each question's `skipIf` rules; the bloc
         // walks them in `lib/blocs/onboarding/onboarding_skip_logic.dart`.
-        const planCreationQuestionIds = [
+        //
+        // Lookup strategy:
+        //   - `_id`-pinned for questions whose IDs are stable across DBs:
+        //       * the original demographic seed (6908fe…) — same _id on every
+        //         deployment because the dev/staging/prod DBs were seeded
+        //         from a shared dump.
+        //       * CAL-24 (69f43ca2…) — pinned by the migration's upsert filter,
+        //         so the IDs in scripts/migrate_onboarding_cal24.js match
+        //         every DB the migration runs against.
+        //   - `sequence`-pinned for CAL-18 rate questions: their migration
+        //     upserts on `{ sequence: X.Y }`, so every DB minted its own
+        //     `_id`s. Looking them up by _id silently dropped them from this
+        //     chain on any DB but the one a developer happened to seed first.
+        //     Sequence is the migration's actual canonical key, so we use it.
+        const stableQuestionIds = [
           '6908fe66896ccf24778c9075', // Choose your gender
           '6908fe66896ccf24778c9076', // How many workouts do you do per week?
           '6908fe66896ccf24778c9077', // What's your typical day like?
@@ -222,9 +236,6 @@ class OnboardingService {
           '6908fe66896ccf24778c907a', // What's your date of birth?
           '6908fe66896ccf24778c907d', // What's your primary goal? (CAL-18)
           '6908fe66896ccf24778c907f', // What's your target weight (kg)? (skipIf maintain)
-          '69f43aaf9c78fba92f5c08aa', // Loss rate preset (skipIf non-lose) — CAL-18
-          '69f43aaf9c78fba92f5c08ab', // Gain rate preset (skipIf non-gain) — CAL-18
-          '69f43aaf9c78fba92f5c08ac', // Recomp INFO_SCREEN (skipIf non-recomp) — CAL-18
           // CAL-24: Dynamic Goal screens. Pinned _ids match the upsert filters
           // in scripts/migrate_onboarding_cal24.js. Branching is governed by
           // each question's skipIf rule against the choice question (14.1).
@@ -233,16 +244,24 @@ class OnboardingService {
           '69f43ca240000000000000a5', // Data import status (skipIf static) — CAL-24
         ].map(id => new mongoose.Types.ObjectId(id));
 
+        // CAL-18 rate questions — pinned by sequence, not _id. See note above.
+        const cal18RateSequences = [13.3, 13.5, 13.7];
+
         // End questions (always last, in this order)
         const endQuestionIds = [
           '6908fe66896ccf24778c9085', // Time to generate your custom plan! (GOAL_CALCULATION)
           '6908fe66896ccf24778c9086', // Congratulations your custom plan is ready! (PLAN_SUMMARY)
         ].map(id => new mongoose.Types.ObjectId(id));
 
-        // Fetch plan creation questions sorted by sequence
+        // Fetch plan creation questions in a single query — _id-pinned and
+        // sequence-pinned together — sorted by sequence so the chain is
+        // contiguous regardless of which lookup matched each row.
         const planQuestions = await Question.find({
-          _id: { $in: planCreationQuestionIds },
-          isActive: true
+          $or: [
+            { _id: { $in: stableQuestionIds } },
+            { sequence: { $in: cal18RateSequences } },
+          ],
+          isActive: true,
         })
           .sort({ sequence: 1 })
           .select('_id text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
