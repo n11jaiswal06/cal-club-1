@@ -846,7 +846,7 @@ class AppFormatService {
       // haven't re-saved goals since the CAL-23 rollout). Recomputed
       // lazily on every /app/progress, so /activity-store/sync writes
       // invalidate implicitly without a write-path coupling.
-      const dynamicGoal = await buildTodaysGoal(userIdObjectId, getTodayDateString());
+      const dynamicGoal = await buildTodaysGoal(user, getTodayDateString());
 
       // Footer data (static navigation)
       const footerData = [

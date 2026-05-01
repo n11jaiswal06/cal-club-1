@@ -7,7 +7,6 @@
 
 const ActivityStoreService = require('./activityStoreService');
 const goalService = require('./goalService');
-const User = require('../models/schemas/User');
 const mongoose = require('mongoose');
 
 // Sums STEPS values across all SUMMARY docs for the day (one doc per
@@ -52,25 +51,26 @@ function flattenWorkouts(exerciseDocs) {
 /**
  * Build the dynamicGoal payload for /app/progress.
  *
- * @param {string|mongoose.Types.ObjectId} userId
+ * @param {Object} user - Already-loaded User document (lean or hydrated).
+ *   Caller is expected to have fetched this — re-querying here would
+ *   double the User.findById on a hot endpoint.
  * @param {string} istDateStr - YYYY-MM-DD in IST. Caller should pass
  *   today; passing a past date is supported but ActivityStore is only
  *   mutable for today, so it'll just reflect a frozen snapshot.
  * @returns {Promise<Object|null>} dynamicGoal block, or null if the user
  *   is not on the dynamic variant or required cached fields are missing.
  */
-async function buildTodaysGoal(userId, istDateStr) {
-  const userIdObjectId = typeof userId === 'string'
-    ? new mongoose.Types.ObjectId(userId)
-    : userId;
-
-  const user = await User.findById(userIdObjectId).lean();
-  if (!user) return null;
+async function buildTodaysGoal(user, istDateStr) {
+  if (!user || !user._id) return null;
 
   const goals = user.goals || {};
   if (goals.goalType !== 'dynamic') return null;
   if (!Number.isFinite(goals.baselineGoal) || goals.baselineGoal <= 0) return null;
   if (!Number.isFinite(goals.rmr) || goals.rmr <= 0) return null;
+
+  const userIdObjectId = typeof user._id === 'string'
+    ? new mongoose.Types.ObjectId(user._id)
+    : user._id;
 
   const [summaryDocs, exerciseDocs] = await Promise.all([
     ActivityStoreService.fetch(userIdObjectId, istDateStr, { category: 'SUMMARY' }),

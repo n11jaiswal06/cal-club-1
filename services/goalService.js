@@ -769,6 +769,46 @@ class GoalService {
    * @returns {{goalType:string,intent:string,outcome:string,baselineGoal:number}}
    * @throws {Error} on invalid mode / outcome combination.
    */
+  resolveGoalMode({ mode, outcome, calorieTarget, dynamicBaseline }) {
+    if (mode !== 'dynamic' && mode !== 'static') {
+      throw new Error("mode must be 'dynamic' or 'static'");
+    }
+    if (mode === 'static') {
+      if (outcome !== undefined) {
+        throw new Error("outcome override is only valid when mode='dynamic'");
+      }
+      return {
+        goalType: 'static',
+        intent: 'static',
+        outcome: 'static_chosen',
+        baselineGoal: calorieTarget
+      };
+    }
+    // mode === 'dynamic' — baselineGoal is always the BMR×1.2 baseline.
+    if (dynamicBaseline === undefined || dynamicBaseline === null) {
+      throw new Error("dynamicBaseline is required when mode='dynamic'");
+    }
+    if (outcome === undefined) {
+      return {
+        goalType: 'dynamic',
+        intent: 'dynamic',
+        outcome: 'dynamic',
+        baselineGoal: dynamicBaseline
+      };
+    }
+    if (outcome === 'static_permission_denied' || outcome === 'static_sync_failed') {
+      return {
+        goalType: 'static',
+        intent: 'dynamic',
+        outcome,
+        baselineGoal: dynamicBaseline
+      };
+    }
+    throw new Error(
+      "outcome override must be 'static_permission_denied' or 'static_sync_failed'"
+    );
+  }
+
   /**
    * CAL-23: Pure math for today's calorie goal under the Dynamic variant.
    * `today's_goal = baselineGoal + min(stepBonus + workoutBonus, 50% × baseline)`
@@ -870,46 +910,6 @@ class GoalService {
         workouts: workoutBreakdown
       }
     };
-  }
-
-  resolveGoalMode({ mode, outcome, calorieTarget, dynamicBaseline }) {
-    if (mode !== 'dynamic' && mode !== 'static') {
-      throw new Error("mode must be 'dynamic' or 'static'");
-    }
-    if (mode === 'static') {
-      if (outcome !== undefined) {
-        throw new Error("outcome override is only valid when mode='dynamic'");
-      }
-      return {
-        goalType: 'static',
-        intent: 'static',
-        outcome: 'static_chosen',
-        baselineGoal: calorieTarget
-      };
-    }
-    // mode === 'dynamic' — baselineGoal is always the BMR×1.2 baseline.
-    if (dynamicBaseline === undefined || dynamicBaseline === null) {
-      throw new Error("dynamicBaseline is required when mode='dynamic'");
-    }
-    if (outcome === undefined) {
-      return {
-        goalType: 'dynamic',
-        intent: 'dynamic',
-        outcome: 'dynamic',
-        baselineGoal: dynamicBaseline
-      };
-    }
-    if (outcome === 'static_permission_denied' || outcome === 'static_sync_failed') {
-      return {
-        goalType: 'static',
-        intent: 'dynamic',
-        outcome,
-        baselineGoal: dynamicBaseline
-      };
-    }
-    throw new Error(
-      "outcome override must be 'static_permission_denied' or 'static_sync_failed'"
-    );
   }
 }
 
