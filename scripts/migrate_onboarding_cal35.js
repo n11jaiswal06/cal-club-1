@@ -113,6 +113,13 @@ function isStandaloneTransactionError(err) {
 
 // Exported for tests so they can inspect the planned ops without a Mongo
 // connection. Pure data — no side effects.
+//
+// Each op carries a `fingerprint` predicate that the runner uses to verify
+// the row at the target sequence is actually the question we expect *before*
+// applying the $set. CAL-18's migration learned the hard way that dev DBs
+// get reordered (sequence numbers drift), and a blind sequence match could
+// silently overwrite the wrong question. The fingerprints accept both
+// pre-migration and post-migration text so re-runs after --apply still pass.
 function buildOps() {
   return [
     {
@@ -120,6 +127,12 @@ function buildOps() {
       filter: { sequence: 2 },
       update: { $set: { isActive: false } },
       upsert: false,
+      // Pre-migration text: "How many workouts do you do per week?".
+      // Post-migration: same text but isActive:false. 'workout' substring
+      // covers both states; rejects unrelated questions that happen to land
+      // at sequence 2 on a reordered DB.
+      fingerprint: (doc) =>
+        typeof doc?.text === 'string' && /workout/i.test(doc.text),
     },
     {
       label:
@@ -135,6 +148,11 @@ function buildOps() {
         },
       },
       upsert: false,
+      // Pre-migration: "What's your typical day like?". Post-migration:
+      // "What's your typical activity level?". 'typical' matches both
+      // (and is uncommon enough in onboarding text to avoid false positives).
+      fingerprint: (doc) =>
+        typeof doc?.text === 'string' && /typical/i.test(doc.text),
     },
   ];
 }
@@ -146,7 +164,10 @@ async function migrate({ apply }) {
 
   const ops = buildOps();
 
-  // 1) Preview phase — fetch current state, print intended diffs.
+  // 1) Preview phase — fetch current state, verify fingerprint, print
+  //    intended diffs. Ops whose fingerprint fails are dropped from the
+  //    plan with a warning so the apply phase doesn't touch them.
+  const plannedOps = [];
   for (const op of ops) {
     const before = await Question.findOne(op.filter).lean();
     if (!before && !op.upsert) {
@@ -155,6 +176,16 @@ async function migrate({ apply }) {
     }
     if (!before) {
       console.log(`  + ${op.label}: will INSERT`);
+      plannedOps.push(op);
+      continue;
+    }
+    if (op.fingerprint && !op.fingerprint(before)) {
+      console.log(
+        `  ⚠ ${op.label}: fingerprint mismatch at seq ${before.sequence} ` +
+          `(text: "${before.text}") — refusing to update. ` +
+          `If the dev DB has been reordered, fix the seed manually before ` +
+          `re-running this migration.`
+      );
       continue;
     }
     const setFields = op.update.$set;
@@ -168,10 +199,18 @@ async function migrate({ apply }) {
         ? `  · ${op.label}: will update (seq ${before.sequence})`
         : `  · ${op.label}: no change (seq ${before.sequence})`
     );
+    plannedOps.push(op);
   }
 
   if (!apply) {
     console.log('\nℹ Dry-run only. Re-run with --apply to persist.\n');
+    return;
+  }
+
+  if (plannedOps.length === 0) {
+    console.log(
+      '\n✗ No ops survived fingerprint checks. Nothing to apply. Aborting.\n'
+    );
     return;
   }
 
@@ -181,7 +220,7 @@ async function migrate({ apply }) {
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
-      for (const op of ops) {
+      for (const op of plannedOps) {
         await runOp(op, session);
       }
     });
@@ -192,7 +231,7 @@ async function migrate({ apply }) {
           'back to non-transactional apply. If this run fails mid-way, re-run ' +
           'the script (ops are idempotent).'
       );
-      for (const op of ops) {
+      for (const op of plannedOps) {
         await runOp(op, null);
       }
     } else {

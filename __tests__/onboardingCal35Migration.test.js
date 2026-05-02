@@ -38,6 +38,69 @@ describe('CAL-35 migration ops', () => {
   });
 });
 
+describe('CAL-35 migration fingerprints — guards against reordered DBs', () => {
+  const ops = buildOps();
+  const bySeq = Object.fromEntries(
+    ops.map((op) => [op.filter.sequence, op])
+  );
+
+  test('every op carries a fingerprint predicate', () => {
+    for (const op of ops) {
+      expect(typeof op.fingerprint).toBe('function');
+    }
+  });
+
+  describe('Q2 fingerprint (workouts/week)', () => {
+    const fingerprint = bySeq[2].fingerprint;
+
+    test('accepts pre-migration text', () => {
+      expect(fingerprint({ text: 'How many workouts do you do per week?' })).toBe(true);
+    });
+
+    test('accepts post-migration state (text unchanged, isActive flipped)', () => {
+      expect(
+        fingerprint({ text: 'How many workouts do you do per week?', isActive: false })
+      ).toBe(true);
+    });
+
+    test('rejects an unrelated question that happens to land at sequence 2', () => {
+      expect(fingerprint({ text: "What's your gender?" })).toBe(false);
+      expect(fingerprint({ text: "Choose your goal" })).toBe(false);
+    });
+
+    test('rejects malformed docs without crashing', () => {
+      expect(fingerprint(null)).toBe(false);
+      expect(fingerprint({})).toBe(false);
+      expect(fingerprint({ text: null })).toBe(false);
+      expect(fingerprint({ text: 42 })).toBe(false);
+    });
+  });
+
+  describe('Q3 fingerprint (typical activity)', () => {
+    const fingerprint = bySeq[3].fingerprint;
+
+    test('accepts the pre-migration text ("typical day")', () => {
+      expect(fingerprint({ text: "What's your typical day like?" })).toBe(true);
+    });
+
+    test('accepts the post-migration text ("typical activity")', () => {
+      expect(fingerprint({ text: "What's your typical activity level?" })).toBe(true);
+    });
+
+    test('rejects unrelated questions at sequence 3 on a reordered DB', () => {
+      expect(fingerprint({ text: 'How many workouts do you do per week?' })).toBe(false);
+      expect(fingerprint({ text: "What's your height and weight?" })).toBe(false);
+      expect(fingerprint({ text: "Choose your gender" })).toBe(false);
+    });
+
+    test('rejects malformed docs without crashing', () => {
+      expect(fingerprint(null)).toBe(false);
+      expect(fingerprint({})).toBe(false);
+      expect(fingerprint({ text: null })).toBe(false);
+    });
+  });
+});
+
 describe('ACTIVITY_LEVEL_OPTIONS — CAL-35 standard PAL bands', () => {
   test('has exactly five bands in the canonical order', () => {
     expect(ACTIVITY_LEVEL_OPTIONS.map((o) => o.value)).toEqual([
