@@ -201,4 +201,49 @@ describe('todaysGoalService — pure helpers', () => {
     expect(flattenWorkouts([])).toEqual([]);
     expect(flattenWorkouts([{ data: null }])).toEqual([]);
   });
+
+  // CAL-23 follow-up: HealthKit-sourced workouts populate active_calories /
+  // total_calories instead of calories_burned. Without the fallback, the
+  // home-tile workoutBonus silently dropped to 0 even when the burn widget
+  // (different parser) showed the workout. Mirror exerciseBurnWidgetService
+  // so the two surfaces never disagree on whether a workout exists.
+  test('flattenWorkouts: HealthKit item (active_calories only) used as calories_burned', () => {
+    const docs = [{
+      data: [{
+        active_calories: 435,
+        total_calories: 416,
+        duration_min: 81,
+        exercise_type: 'TRADITIONAL_STRENGTH_TRAINING',
+      }]
+    }];
+    const workouts = flattenWorkouts(docs);
+    expect(workouts).toEqual([{ calories_burned: 435, duration_min: 81 }]);
+  });
+
+  test('flattenWorkouts: calories_burned wins over active_calories / total_calories', () => {
+    const docs = [{
+      data: [{
+        calories_burned: 300,
+        active_calories: 400,
+        total_calories: 350,
+        duration_min: 30,
+      }]
+    }];
+    const workouts = flattenWorkouts(docs);
+    expect(workouts[0].calories_burned).toBe(300);
+  });
+
+  test('flattenWorkouts: total_calories used when calories_burned and active_calories absent', () => {
+    const docs = [{
+      data: [{ total_calories: 200, duration_min: 25 }]
+    }];
+    const workouts = flattenWorkouts(docs);
+    expect(workouts[0].calories_burned).toBe(200);
+  });
+
+  test('flattenWorkouts: all calorie fields missing → 0 (worker still surfaces, computeTodaysGoal skips)', () => {
+    const docs = [{ data: [{ duration_min: 30 }] }];
+    const workouts = flattenWorkouts(docs);
+    expect(workouts[0].calories_burned).toBe(0);
+  });
 });

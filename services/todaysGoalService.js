@@ -32,11 +32,24 @@ function sumDailySteps(summaryDocs) {
 // utils/activityStoreUtils.js), so manual workouts (which exerciseService
 // writes through to ActivityStore with source='manual') flow through this
 // same path with no source-specific branching.
+//
+// Calorie field fallback mirrors exerciseBurnWidgetService.buildWorkoutEntry
+// so the home tile's `workoutBonus` and the burn widget's displayed kcal
+// agree on the same number — different fallback chains here would silently
+// drop HealthKit-sourced workouts (which populate active_calories /
+// total_calories instead of calories_burned) and surface as workoutBonus=0
+// despite a visible workout in the burn widget.
 function flattenWorkouts(exerciseDocs) {
   const workouts = [];
   for (const doc of exerciseDocs || []) {
     for (const item of doc.data || []) {
-      const calories_burned = Number.isFinite(item.calories_burned) ? item.calories_burned : 0;
+      const calories_burned = Number.isFinite(item.calories_burned)
+        ? item.calories_burned
+        : Number.isFinite(item.active_calories)
+          ? item.active_calories
+          : Number.isFinite(item.total_calories)
+            ? item.total_calories
+            : 0;
       const duration_min = Number.isFinite(item.duration_min)
         ? item.duration_min
         : (Number.isFinite(item.start_time) && Number.isFinite(item.end_time)
