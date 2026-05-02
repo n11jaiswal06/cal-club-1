@@ -9,7 +9,7 @@ const Membership = require('../models/schemas/Membership');
 const { checkMembership } = require('../utils/membershipCheck');
 const { validatePhase, getCurrentPhaseIST } = require('../config/heroBriefFallbacks');
 const { getTodayDateString } = require('../utils/dateUtils');
-const { buildTodaysGoal } = require('./todaysGoalService');
+const { buildTodaysGoal, buildTodaysMacros } = require('./todaysGoalService');
 
 // Interfaces for type consistency
 const AppBarData = {
@@ -166,9 +166,16 @@ class AppFormatService {
       ]);
       todayData.exerciseBurn = exerciseBurn.totalCalories;
 
+      // CAL-44: per-day macros for dynamic users. Synchronous — recipe
+      // lives on user.goals (already loaded above), no DB read. Returns
+      // null for static users / dynamic users without the recipe (e.g.
+      // not yet re-saved post-CAL-44); downstream widgets fall back to
+      // flat persisted goals.dailyProtein/Fats/Carbs in that case.
+      const todaysMacros = buildTodaysMacros(user, dynamicGoal?.todaysGoal);
+
       // --- Hero section ---
       const heroSectionWidget = await this.formatHeroSectionWidget(
-        userId, date, todayData, goals, clientPhase, regenerate, isPastDay, dynamicGoal
+        userId, date, todayData, goals, clientPhase, regenerate, isPastDay, dynamicGoal, todaysMacros
       );
 
       // Format the response
@@ -313,10 +320,19 @@ class AppFormatService {
     };
   }
 
-  static formatMacroWidget(todayData, goals) {
-    const caloriesLeft = Math.max(0, goals.dailyCalories - todayData.totalCalories);
+  static formatMacroWidget(todayData, goals, dynamicGoal = null, todaysMacros = null) {
+    // CAL-44: dynamic users — primary card uses today's calorie ceiling
+    // (baseline + activity bonus) and secondary cards use today's
+    // per-day macros. Static users keep flat persisted goals; ?? guards
+    // also keep dynamic users without a recipe yet on flat fallbacks.
+    const calorieTarget = dynamicGoal ? dynamicGoal.todaysGoal : goals.dailyCalories;
+    const proteinTarget = todaysMacros ? todaysMacros.protein.goal_g : goals.dailyProtein;
+    const carbsTarget = todaysMacros ? todaysMacros.carbs.goal_g : goals.dailyCarbs;
+    const fatsTarget = todaysMacros ? todaysMacros.fat.goal_g : goals.dailyFats;
+
+    const caloriesLeft = Math.max(0, calorieTarget - todayData.totalCalories);
     const caloriesCompleted = todayData.totalCalories;
-    
+
     return {
       widgetType: "macro_widget",
       widgetData: {
@@ -326,7 +342,7 @@ class AppFormatService {
           text: "Calories left",
           value: parseFloat(caloriesLeft.toFixed(2)),
           completed: parseFloat(caloriesCompleted.toFixed(2)),
-          target: goals.dailyCalories
+          target: calorieTarget
         },
         secondary_cards: [
           {
@@ -335,7 +351,7 @@ class AppFormatService {
             text: "Protein",
             value: parseFloat(todayData.totalProtein.toFixed(2)),
             completed: parseFloat(todayData.totalProtein.toFixed(2)),
-            target: goals.dailyProtein
+            target: proteinTarget
           },
           {
             icon: "wheat",
@@ -343,7 +359,7 @@ class AppFormatService {
             text: "Carbs",
             value: parseFloat(todayData.totalCarbs.toFixed(2)),
             completed: parseFloat(todayData.totalCarbs.toFixed(2)),
-            target: goals.dailyCarbs
+            target: carbsTarget
           },
           {
             icon: "water",
@@ -351,7 +367,7 @@ class AppFormatService {
             text: "Fats",
             value: parseFloat(todayData.totalFat.toFixed(2)),
             completed: parseFloat(todayData.totalFat.toFixed(2)),
-            target: goals.dailyFats
+            target: fatsTarget
           }
         ]
       }
@@ -365,7 +381,7 @@ class AppFormatService {
    *
    * For past days, returns only the Evening Wrap with no phase tabs.
    */
-  static async formatHeroSectionWidget(userId, date, todayData, goals, clientPhase, regenerate, isPastDay, dynamicGoal = null) {
+  static async formatHeroSectionWidget(userId, date, todayData, goals, clientPhase, regenerate, isPastDay, dynamicGoal = null, todaysMacros = null) {
     try {
       let showPhaseTabs;
       let activePhaseTabs;
@@ -427,6 +443,11 @@ class AppFormatService {
         dynamic: dynamicGoal
       };
 
+      // CAL-44: per-day macro blocks. For dynamic users with a recipe,
+      // todaysMacros holds {protein,fat,carbs} scaled to today's calorie
+      // ceiling (carbs absorb the activity bonus). For static users — and
+      // dynamic users without the recipe yet — fall back to flat persisted
+      // goals.dailyProtein/Fats/Carbs, byte-identical to pre-CAL-44.
       return {
         widgetType: 'hero_section',
         widgetData: {
@@ -435,7 +456,15 @@ class AppFormatService {
           calories,
           protein: {
             consumed: parseFloat(todayData.totalProtein.toFixed(2)),
-            goal: goals.dailyProtein
+            goal: todaysMacros ? todaysMacros.protein.goal_g : goals.dailyProtein
+          },
+          fat: {
+            consumed: parseFloat(todayData.totalFat.toFixed(2)),
+            goal: todaysMacros ? todaysMacros.fat.goal_g : goals.dailyFats
+          },
+          carbs: {
+            consumed: parseFloat(todayData.totalCarbs.toFixed(2)),
+            goal: todaysMacros ? todaysMacros.carbs.goal_g : goals.dailyCarbs
           },
           phases
         }
@@ -460,6 +489,14 @@ class AppFormatService {
           protein: {
             consumed: parseFloat((todayData?.totalProtein || 0).toFixed(2)),
             goal: goals?.dailyProtein || 150
+          },
+          fat: {
+            consumed: parseFloat((todayData?.totalFat || 0).toFixed(2)),
+            goal: goals?.dailyFats || 65
+          },
+          carbs: {
+            consumed: parseFloat((todayData?.totalCarbs || 0).toFixed(2)),
+            goal: goals?.dailyCarbs || 250
           },
           phases: [{
             phase: fallbackPhase,
@@ -781,12 +818,34 @@ class AppFormatService {
         }
       }
 
-      // Get daily goals from user
+      // CAL-23: dynamic-goal block. Returns null for static users or
+      // dynamic users missing the cached rmr/baselineGoal (i.e. those who
+      // haven't re-saved goals since the CAL-23 rollout). Recomputed
+      // lazily on every /app/progress, so /activity-store/sync writes
+      // invalidate implicitly without a write-path coupling.
+      //
+      // CAL-44: hoisted above the dailyGoal construction so the response
+      // can surface today's per-day numbers — dynamic users see
+      // calorie/protein/carbs/fats matching what the home tile shows,
+      // not stale flat persisted values that drift from todaysGoal.
+      const dynamicGoalForProgress = await buildTodaysGoal(user, getTodayDateString());
+      const todaysMacrosForProgress = buildTodaysMacros(user, dynamicGoalForProgress?.todaysGoal);
+
+      // Daily goals — dynamic users get today's scaled numbers; static
+      // and recipe-less users keep the flat persisted goals.
       const dailyGoal = {
-        calorie: user.goals?.dailyCalories || 2000,
-        protein: user.goals?.dailyProtein || 150,
-        carbs: user.goals?.dailyCarbs || 250,
-        fats: user.goals?.dailyFats || 65
+        calorie: dynamicGoalForProgress
+          ? dynamicGoalForProgress.todaysGoal
+          : (user.goals?.dailyCalories || 2000),
+        protein: todaysMacrosForProgress
+          ? todaysMacrosForProgress.protein.goal_g
+          : (user.goals?.dailyProtein || 150),
+        carbs: todaysMacrosForProgress
+          ? todaysMacrosForProgress.carbs.goal_g
+          : (user.goals?.dailyCarbs || 250),
+        fats: todaysMacrosForProgress
+          ? todaysMacrosForProgress.fat.goal_g
+          : (user.goals?.dailyFats || 65)
       };
 
       // Format lastCheckedIn date
@@ -867,12 +926,10 @@ class AppFormatService {
       // Get weekly overview data
       const weeklyOverview = await this.getWeeklyOverviewData(userIdObjectId, dailyGoal.calorie);
 
-      // CAL-23: dynamic-goal block. Returns null for static users or
-      // dynamic users missing the cached rmr/baselineGoal (i.e. those who
-      // haven't re-saved goals since the CAL-23 rollout). Recomputed
-      // lazily on every /app/progress, so /activity-store/sync writes
-      // invalidate implicitly without a write-path coupling.
-      const dynamicGoal = await buildTodaysGoal(user, getTodayDateString());
+      // CAL-44: dynamicGoal already computed above (hoisted so dailyGoal
+      // can reflect today's scaled numbers); reuse the same reference
+      // here so the response stays internally consistent.
+      const dynamicGoal = dynamicGoalForProgress;
 
       // Footer data (static navigation)
       const footerData = [

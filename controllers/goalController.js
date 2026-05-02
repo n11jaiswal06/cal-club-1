@@ -243,6 +243,15 @@ async function calculateAndSaveGoals(req, res) {
 
     // Save to user profile (CAL-21: write all 9 fields atomically — the 5
     // legacy macro fields plus the 4 dynamic-goal fields).
+    //
+    // CAL-44: also persist the macro-recipe + weightKg snapshot for dynamic
+    // users. The recipe is what the per-day buildTodaysMacros path reads
+    // each render to scale carbs with todaysGoal. Static users skip these
+    // fields — schema is sparse — and continue to render flat persisted
+    // dailyProtein/Fats/Carbs, byte-identical to pre-CAL-44 behaviour.
+    const macroConfig = goalService.MACRO_CONFIGS[weightGoalType] || goalService.MACRO_CONFIGS['maintain'];
+    const isDynamic = resolvedMode.goalType === 'dynamic';
+
     const { updateUser } = require('../models/user');
     const updatedUser = await updateUser(userId, {
       'goals.goal': goalDescription,
@@ -254,7 +263,14 @@ async function calculateAndSaveGoals(req, res) {
       'goals.intent': resolvedMode.intent,
       'goals.outcome': resolvedMode.outcome,
       'goals.baselineGoal': resolvedMode.baselineGoal,
-      'goals.rmr': rmr
+      'goals.rmr': rmr,
+      ...(isDynamic ? {
+        'goals.weightKg': currentWeight,
+        'goals.weightGoalType': weightGoalType,
+        'goals.proteinGramsPerKg': macroConfig.protein_factor,
+        'goals.fatPctFloor': macroConfig.fat_pct,
+        'goals.fatGramsPerKgFloor': goalService.DEFAULT_FAT_G_PER_KG_FLOOR
+      } : {})
     });
 
     if (!updatedUser) {
@@ -265,6 +281,31 @@ async function calculateAndSaveGoals(req, res) {
       }));
       return;
     }
+
+    // CAL-44: plan-screen baseline view for dynamic users. The plan screen
+    // shows what a typical sedentary day looks like at the BMR×1.2
+    // baseline (e.g. "1540 kcal · 140p / 43f / 149c") — the floor the
+    // user will actually see on a zero-activity day, with macros computed
+    // against that floor instead of the static-equivalent TDEE number that
+    // drives planData.calories. Static users skip this block entirely;
+    // their dailyCalories already is their daily ceiling, so a separate
+    // baseline view would be redundant.
+    //
+    // computeTodaysMacros returns null only on invalid inputs; by this
+    // point validateInputs has guaranteed currentWeight > 0 and
+    // computeDynamicBaseline has guaranteed dynBaseline.baseline > 0, so
+    // the result is non-null in practice. The defensive `|| null` keeps
+    // the response shape stable if a future refactor loosens that
+    // invariant — better to omit baselineMacros than to 500.
+    const baselineMacros = isDynamic
+      ? goalService.computeTodaysMacros({
+          todaysGoal: dynBaseline.baseline,
+          weight_kg: currentWeight,
+          protein_factor: macroConfig.protein_factor,
+          fat_pct_floor: macroConfig.fat_pct,
+          fat_g_per_kg_floor: goalService.DEFAULT_FAT_G_PER_KG_FLOOR
+        })
+      : null;
 
     // Prepare response with planData. CAL-21: also echo the 4 resolved
     // dynamic-goal fields so the client can render the home variant
@@ -283,7 +324,30 @@ async function calculateAndSaveGoals(req, res) {
         goalType: resolvedMode.goalType,
         intent: resolvedMode.intent,
         outcome: resolvedMode.outcome,
-        baselineGoal: resolvedMode.baselineGoal
+        baselineGoal: resolvedMode.baselineGoal,
+        // CAL-44: echo the persisted recipe for dynamic users so the
+        // client can render today's per-day macros immediately without
+        // a follow-up /users/profile fetch.
+        ...(isDynamic ? {
+          weightKg: currentWeight,
+          weightGoalType,
+          proteinGramsPerKg: macroConfig.protein_factor,
+          fatPctFloor: macroConfig.fat_pct,
+          fatGramsPerKgFloor: goalService.DEFAULT_FAT_G_PER_KG_FLOOR,
+          // Baseline calorie + macros for the dynamic plan screen.
+          // Present (and populated) for dynamic users; omitted entirely
+          // for static. Skip emitting the block at all if the macro math
+          // failed unexpectedly — keeps the schema stable rather than
+          // surfacing a half-populated payload.
+          ...(baselineMacros ? {
+            baselineMacros: {
+              calories: dynBaseline.baseline,
+              protein: baselineMacros.protein_g,
+              fat: baselineMacros.fat_g,
+              carbs: baselineMacros.carb_g
+            }
+          } : {})
+        } : {})
       },
       message: 'Goals calculated and saved successfully'
     };

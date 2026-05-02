@@ -31,6 +31,8 @@ beforeEach(() => {
 const baseTodayData = {
   totalCalories: 800,
   totalProtein: 60,
+  totalFat: 25,
+  totalCarbs: 90,
   exerciseBurn: 250
 };
 
@@ -132,5 +134,72 @@ describe('formatHeroSectionWidget — CAL-28 dynamic variant', () => {
     expect(c.dynamic.bonusApplied).toBe(0);
     expect(c.dynamic.baselineGoal).toBe(1900);
     expect(c.dynamic.todaysGoal).toBe(1900);
+  });
+});
+
+// CAL-44: hero macro tiles — protein/fat/carbs each have {consumed, goal}.
+// Static users keep flat persisted goals; dynamic users with todaysMacros
+// override `goal` with today's per-day numbers; recipe-less dynamic users
+// fall back to flat.
+describe('formatHeroSectionWidget — CAL-44 macro blocks', () => {
+  test('static (todaysMacros=null) → protein/fat/carbs read flat persisted goals', async () => {
+    const widget = await AppFormatService.formatHeroSectionWidget(
+      'user1', '2026-05-03', { ...baseTodayData },
+      baseGoals, 'morning', false, false, null, null
+    );
+    const w = widget.widgetData;
+    expect(w.protein).toEqual({ consumed: 60, goal: 150 });
+    expect(w.fat).toEqual({ consumed: 25, goal: 65 });
+    expect(w.carbs).toEqual({ consumed: 90, goal: 250 });
+  });
+
+  test('dynamic with todaysMacros → goal reflects per-day scaling', async () => {
+    const dynamicGoal = {
+      baselineGoal: 1540, stepBonus: 0, workoutBonus: 0,
+      bonusApplied: 0, capped: false, todaysGoal: 1540,
+      breakdown: { netSteps: 0, workouts: [] }
+    };
+    const todaysMacros = {
+      protein: { goal_g: 140, goal_kcal: 560 },
+      fat:     { goal_g: 43,  goal_kcal: 385 },
+      carbs:   { goal_g: 149, goal_kcal: 595 }
+    };
+    const widget = await AppFormatService.formatHeroSectionWidget(
+      'user1', '2026-05-03', { ...baseTodayData },
+      baseGoals, 'morning', false, false, dynamicGoal, todaysMacros
+    );
+    const w = widget.widgetData;
+    expect(w.protein.goal).toBe(140);                   // not 150 (flat persisted)
+    expect(w.fat.goal).toBe(43);                        // not 65
+    expect(w.carbs.goal).toBe(149);                     // not 250 — scales with todaysGoal
+    expect(w.protein.consumed).toBe(60);
+  });
+
+  test('dynamic without todaysMacros → falls back to flat (recipe missing)', async () => {
+    const dynamicGoal = {
+      baselineGoal: 1540, stepBonus: 0, workoutBonus: 0,
+      bonusApplied: 0, capped: false, todaysGoal: 1540,
+      breakdown: { netSteps: 0, workouts: [] }
+    };
+    const widget = await AppFormatService.formatHeroSectionWidget(
+      'user1', '2026-05-03', { ...baseTodayData },
+      baseGoals, 'morning', false, false, dynamicGoal, null
+    );
+    const w = widget.widgetData;
+    expect(w.protein.goal).toBe(150);                   // flat — recipe-less dynamic user
+    expect(w.fat.goal).toBe(65);
+    expect(w.carbs.goal).toBe(250);
+  });
+
+  test('catch-block fallback emits all three macro blocks with default goals', async () => {
+    HeroBriefService.getOrGenerateBrief.mockRejectedValueOnce(new Error('brief boom'));
+    const widget = await AppFormatService.formatHeroSectionWidget(
+      'user1', '2026-05-03', { ...baseTodayData },
+      baseGoals, 'morning', false, false, null, null
+    );
+    const w = widget.widgetData;
+    expect(w.protein.goal).toBe(150);
+    expect(w.fat.goal).toBe(65);
+    expect(w.carbs.goal).toBe(250);
   });
 });

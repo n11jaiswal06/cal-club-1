@@ -111,8 +111,62 @@ async function buildTodaysGoal(user, istDateStr) {
   };
 }
 
+/**
+ * CAL-44: Per-day macro split for dynamic users.
+ *
+ * Synchronous — the recipe coefficients live on user.goals (already
+ * hydrated by the caller), so no DB read here. Mirrors buildTodaysGoal's
+ * "null on static / null on missing fields" contract: the format layer
+ * (formatHeroSectionWidget / formatMacroWidget / getProgressData) treats
+ * a null return as "fall back to flat persisted dailyProtein/Fats/Carbs,"
+ * so existing dynamic users who haven't re-saved goals post-CAL-44 keep
+ * working — they just don't see daily-scaled macros until they re-save.
+ *
+ * @param {Object} user - Already-loaded User document. Caller is expected
+ *   to have fetched this; mirrors buildTodaysGoal's contract.
+ * @param {number} todaysGoal - The day's calorie ceiling. Pass
+ *   dynamicGoal.todaysGoal from buildTodaysGoal.
+ * @returns {Object|null} {protein, fat, carbs} where each is
+ *   {goal_g, goal_kcal}, or null if user is static / missing recipe /
+ *   missing weightKg / todaysGoal invalid.
+ */
+function buildTodaysMacros(user, todaysGoal) {
+  if (!user) return null;
+  const goals = user.goals || {};
+  if (goals.goalType !== 'dynamic') return null;
+  if (!Number.isFinite(goals.weightKg) || goals.weightKg <= 0) return null;
+  if (!Number.isFinite(goals.proteinGramsPerKg) || goals.proteinGramsPerKg <= 0) return null;
+  if (!Number.isFinite(goals.fatPctFloor) || goals.fatPctFloor <= 0) return null;
+  if (!Number.isFinite(todaysGoal) || todaysGoal <= 0) return null;
+
+  // fatGramsPerKgFloor has a schema default, but for legacy users
+  // persisted before the default landed (or any gap), fall back to the
+  // service-level constant — keeps the math independent of schema
+  // migration timing.
+  const fatGFloor = Number.isFinite(goals.fatGramsPerKgFloor) && goals.fatGramsPerKgFloor >= 0
+    ? goals.fatGramsPerKgFloor
+    : goalService.DEFAULT_FAT_G_PER_KG_FLOOR;
+
+  const macros = goalService.computeTodaysMacros({
+    todaysGoal,
+    weight_kg: goals.weightKg,
+    protein_factor: goals.proteinGramsPerKg,
+    fat_pct_floor: goals.fatPctFloor,
+    fat_g_per_kg_floor: fatGFloor
+  });
+
+  if (!macros) return null;
+
+  return {
+    protein: { goal_g: macros.protein_g, goal_kcal: macros.protein_kcal },
+    fat:     { goal_g: macros.fat_g,     goal_kcal: macros.fat_kcal },
+    carbs:   { goal_g: macros.carb_g,    goal_kcal: macros.carb_kcal }
+  };
+}
+
 module.exports = {
   buildTodaysGoal,
+  buildTodaysMacros,
   // exported for unit testing
   sumDailySteps,
   flattenWorkouts
