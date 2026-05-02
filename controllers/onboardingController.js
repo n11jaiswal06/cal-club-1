@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const OnboardingService = require('../services/onboardingService');
+const { OnboardingValidationError } = require('../services/onboardingService');
 const { evaluateApplicability } = require('../services/skipIfEvaluator');
 const parseBody = require('../utils/parseBody');
 const { reportError } = require('../utils/sentryReporter');
@@ -72,7 +73,7 @@ class OnboardingController {
 
       try {
         const result = await OnboardingService.saveUserAnswers(answersWithUserId);
-        
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           success: true,
@@ -80,6 +81,19 @@ class OnboardingController {
           data: result.results
         }));
       } catch (error) {
+        // CAL-33: structured 422 for cross-field validation failures
+        // (e.g. target weight contradicts goal direction). The FE binds
+        // copy by `errors[i].code` and may also read the same copy from
+        // `Question.validation.copy` for inline helper text.
+        if (error instanceof OnboardingValidationError) {
+          res.writeHead(422, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: false,
+            message: error.message,
+            errors: error.errors
+          }));
+          return;
+        }
         reportError(error, { req });
         console.error('Error saving answers:', error);
         res.writeHead(500, { 'Content-Type': 'application/json' });

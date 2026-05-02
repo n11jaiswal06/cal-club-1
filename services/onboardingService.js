@@ -3,6 +3,26 @@ const UserQuestion = require('../models/schemas/UserQuestion');
 const UserLog = require('../models/schemas/UserLog');
 const mongoose = require('mongoose');
 const { createNotificationPreferencesFromString } = require('../models/notificationPreference');
+const { validateTargetWeight } = require('./targetWeightValidator');
+
+// CAL-33: structured 422 error for cross-field onboarding validation. The
+// onboarding controller serializes `errors` (and the matching server-driven
+// copy) so the FE can render targeted helper text per field/code instead of
+// a flat string.
+class OnboardingValidationError extends Error {
+  constructor(errors) {
+    super('Onboarding answers failed validation');
+    this.name = 'OnboardingValidationError';
+    this.errors = Array.isArray(errors) ? errors : [];
+  }
+}
+
+// Canonical question identities. CAL-30 introduced slugs; we still pin the
+// _id on long-lived envs that minted the canonical hexes for the original
+// seed (CAL-9). Lookup falls back to slug, then _id.
+const TARGET_WEIGHT_QUESTION_ID = '6908fe66896ccf24778c907f';
+const HEIGHT_WEIGHT_QUESTION_ID = '6908fe66896ccf24778c9079';
+const GOAL_TYPE_QUESTION_ID = '6908fe66896ccf24778c907d';
 
 class OnboardingService {
   /**
@@ -192,7 +212,7 @@ class OnboardingService {
           _id: notificationQuestionId,
           isActive: true
         })
-          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
+          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf validation')
           .lean();
         
         return question ? [question] : [];
@@ -267,7 +287,7 @@ class OnboardingService {
           isActive: true,
         })
           .sort({ sequence: 1 })
-          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
+          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf validation')
           .lean();
 
         // Fetch end questions
@@ -276,7 +296,7 @@ class OnboardingService {
           isActive: true
         })
           .sort({ sequence: 1 })
-          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
+          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf validation')
           .lean();
 
         // Combine: plan questions first, then end questions
@@ -286,10 +306,106 @@ class OnboardingService {
       // Default behavior: return all active questions
       return await Question.find({ isActive: true })
         .sort({ sequence: 1 })
-        .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf');
+        .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf validation');
     } catch (error) {
       throw new Error(`Failed to fetch active questions: ${error.message}`);
     }
+  }
+
+  // CAL-33: cross-field validation of submitted target weight against the
+  // user's goal direction and current weight. Runs BEFORE persisting any
+  // UserQuestion rows so a 422 is returned without partial writes. When
+  // the target-weight question isn't in the payload, this is a no-op.
+  //
+  // Resolution order for the two cross-field inputs:
+  //   • goal value: prefer the goal-type answer in the same payload; fall
+  //     back to the user's most recent UserQuestion answer for that
+  //     question. Onboarding submits answers question-by-question, so the
+  //     stored prior answer is the realistic source.
+  //   • current weight: prefer the height/weight answer in the same
+  //     payload; fall back to the most recent UserLog WEIGHT entry, then
+  //     the most recent height/weight UserQuestion answer.
+  //
+  // The Question.validation payload (set by the CAL-33 migration) carries
+  // the absolute bounds, the minDeltaKg, and the server-driven copy keyed
+  // by error code. The validator returns a list of structured errors; the
+  // caller throws OnboardingValidationError to surface a 422.
+  static async validateTargetWeightAnswer(answers) {
+    const targetAnswer = answers.find(a => String(a.questionId) === TARGET_WEIGHT_QUESTION_ID);
+    if (!targetAnswer || !Array.isArray(targetAnswer.values) || targetAnswer.values.length === 0) {
+      return;
+    }
+    const targetString = targetAnswer.values[0];
+    if (typeof targetString !== 'string') return;
+    const targetKg = this.extractWeightFromAnswer(targetString);
+    if (!targetKg) {
+      // Malformed answer payload — let downstream `extractWeightFromAnswer`
+      // path no-op as before. We only validate when the value parses.
+      return;
+    }
+
+    const userId = targetAnswer.userId;
+    const targetQuestion = await Question.findById(TARGET_WEIGHT_QUESTION_ID)
+      .select('validation')
+      .lean();
+    const validation = targetQuestion?.validation;
+    if (!validation) {
+      // No validation payload seeded yet — nothing to enforce. Migration
+      // hasn't run, so we err on the side of accepting the answer rather
+      // than blocking onboarding.
+      return;
+    }
+
+    const [goalValue, currentKg] = await Promise.all([
+      this.resolveGoalValue(userId, answers),
+      this.resolveCurrentWeightKg(userId, answers)
+    ]);
+
+    const result = validateTargetWeight({ targetKg, currentKg, goalValue, validation });
+    if (!result.valid) {
+      throw new OnboardingValidationError(result.errors);
+    }
+  }
+
+  static async resolveGoalValue(userId, answers) {
+    const inPayload = answers.find(a => String(a.questionId) === GOAL_TYPE_QUESTION_ID);
+    if (inPayload && Array.isArray(inPayload.values) && inPayload.values.length > 0) {
+      const v = inPayload.values[0];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+    const prior = await UserQuestion.findOne({
+      userId,
+      questionId: new mongoose.Types.ObjectId(GOAL_TYPE_QUESTION_ID),
+      deletedAt: null
+    }).sort({ createdAt: -1 }).select('values').lean();
+    const v = prior?.values?.[0];
+    return typeof v === 'string' && v.trim() ? v.trim() : null;
+  }
+
+  static async resolveCurrentWeightKg(userId, answers) {
+    const inPayload = answers.find(a => String(a.questionId) === HEIGHT_WEIGHT_QUESTION_ID);
+    if (inPayload && Array.isArray(inPayload.values) && inPayload.values.length > 0) {
+      const w = this.extractWeightFromAnswer(inPayload.values[0]);
+      if (w) return w;
+    }
+    const userIdObjectId = typeof userId === 'string' ? new mongoose.Types.ObjectId(userId) : userId;
+    const log = await UserLog.findOne({ userId: userIdObjectId, type: 'WEIGHT' })
+      .sort({ date: -1 })
+      .select('value')
+      .lean();
+    const fromLog = log ? parseFloat(log.value) : NaN;
+    if (Number.isFinite(fromLog) && fromLog > 0) return fromLog;
+    const priorAnswer = await UserQuestion.findOne({
+      userId: userIdObjectId,
+      questionId: new mongoose.Types.ObjectId(HEIGHT_WEIGHT_QUESTION_ID),
+      deletedAt: null
+    }).sort({ createdAt: -1 }).select('values').lean();
+    const fromQuestion = priorAnswer?.values?.[0];
+    if (typeof fromQuestion === 'string') {
+      const w = this.extractWeightFromAnswer(fromQuestion);
+      if (w) return w;
+    }
+    return null;
   }
 
   static async saveUserAnswers(answers) {
@@ -304,6 +420,11 @@ class OnboardingService {
           throw new Error('Each answer must have userId, questionId, and values array');
         }
       }
+
+      // CAL-33: cross-field validation must run BEFORE any persistence so
+      // that a 422 leaves the DB untouched. OnboardingValidationError
+      // propagates to the controller and serializes as a structured 422.
+      await this.validateTargetWeightAnswer(answers);
 
       // Extract unique userIds and questionIds for bulk operations
       const userIds = [...new Set(answers.map(a => a.userId))];
@@ -349,8 +470,9 @@ class OnboardingService {
         }
       }
 
-      // Update target weight if height/weight question is answered (questionId: 6908fe66896ccf24778c907f)
-      const TARGET_WEIGHT_QUESTION_ID = '6908fe66896ccf24778c907f';
+      // Update target weight if target-weight question is answered.
+      // Validation already ran in validateTargetWeightAnswer above; this
+      // path is the persistence-side effect (User.goals.targetWeight).
       const targetWeightAnswer = answers.find(answer => {
         const questionIdStr = answer.questionId?.toString();
         return questionIdStr === TARGET_WEIGHT_QUESTION_ID;
@@ -447,6 +569,10 @@ class OnboardingService {
         results
       };
     } catch (error) {
+      // CAL-33: structured validation errors must propagate as-is so the
+      // controller can map them to 422 with field/code/message. Wrapping
+      // in a generic Error would lose the structure.
+      if (error instanceof OnboardingValidationError) throw error;
       throw new Error(`Failed to save user answers: ${error.message}`);
     }
   }
@@ -474,3 +600,4 @@ class OnboardingService {
 }
 
 module.exports = OnboardingService;
+module.exports.OnboardingValidationError = OnboardingValidationError;

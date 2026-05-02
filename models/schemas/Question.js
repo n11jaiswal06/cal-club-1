@@ -145,6 +145,43 @@ const dataImportSchema = new mongoose.Schema({
   syncFailed: dataImportStateCopySchema
 }, { _id: false });
 
+// CAL-33: numeric/cross-field validation payload for input questions.
+//
+// Onboarding answers are submitted via POST /onboarding/answers; the server
+// must reject inputs that contradict prior answers (e.g. target weight on
+// the wrong side of current weight for the user's goal direction). Numbers
+// and copy live here — not hardcoded in Dart — so the FE can:
+//   • disable out-of-range PICKER values pre-tap from `min`/`max` and the
+//     resolved goal-direction floor/ceiling, and
+//   • render the same helper text that the server would return on a 422.
+//
+// `requireGoalDirection` is the only cross-field rule today. It references
+// the goal-type question by slug (CAL-30 stable identity) and the current-
+// weight source by slug; the validator resolves both at submit time. Other
+// rule shapes (e.g. age vs. DOB) belong as sibling fields on this schema
+// when they appear, not as untyped Mixed payloads.
+const validationSchema = new mongoose.Schema({
+  minValue: { type: Number },
+  maxValue: { type: Number },
+  requireGoalDirection: {
+    goalQuestionSlug: { type: String, trim: true },
+    currentWeightQuestionSlug: { type: String, trim: true },
+    minDeltaKg: { type: Number }
+  },
+  // Server-driven copy keyed by error code. The validator returns the
+  // matching `code` and `message`; the FE may also read these at render
+  // time for inline helper text on the picker.
+  copy: {
+    outOfRange: { type: String, trim: true },
+    invalidForLose: { type: String, trim: true },
+    invalidForGain: { type: String, trim: true },
+    invalidForNonDirectional: { type: String, trim: true },
+    minDelta: { type: String, trim: true },
+    missingCurrentWeight: { type: String, trim: true },
+    missingGoal: { type: String, trim: true }
+  }
+}, { _id: false });
+
 // One conditional rule that hides this question if the user's previously-
 // stored answer to `questionId` matches any value in `valueIn` (semantic) or
 // any text in `textIn` (display fallback). Multiple rules combine as OR.
@@ -222,6 +259,9 @@ const questionSchema = new mongoose.Schema({
   healthPermissionPriming: healthPermissionPrimingSchema,
   dataImport: dataImportSchema,
   skipIf: [skipIfSchema],
+  // CAL-33: optional input-validation payload. Populated only on questions
+  // that need numeric bounds or cross-field rules (currently target_weight).
+  validation: validationSchema,
   sequence: {
     type: Number,
     required: true,
