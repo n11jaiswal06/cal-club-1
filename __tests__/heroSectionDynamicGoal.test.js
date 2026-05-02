@@ -1,8 +1,10 @@
 // CAL-27/28: hero section calories payload shape.
 //
 // Verifies that formatHeroSectionWidget folds the dynamicGoal block
-// into the hero calories payload for dynamic users and emits a clean
-// static payload (no `+ burn` additive) for static users.
+// into the hero calories payload (under a `dynamic` sub-object that
+// mirrors /app/progress.dynamicGoal) for dynamic users and emits a
+// clean static payload (no `+ burn` additive, dynamic: null) for
+// static users.
 
 jest.mock('../services/heroBriefService', () => ({
   getOrGenerateBrief: jest.fn(),
@@ -40,7 +42,7 @@ const baseGoals = {
 };
 
 describe('formatHeroSectionWidget — CAL-27 static variant', () => {
-  test('static (no dynamicGoal) → goal=dailyCalories, burn=0, goalType=static', async () => {
+  test('static (no dynamicGoal) → goal=dailyCalories, burn=0, dynamic=null', async () => {
     const widget = await AppFormatService.formatHeroSectionWidget(
       'user1', '2026-05-03', { ...baseTodayData },
       baseGoals, 'morning', false, false, null
@@ -50,13 +52,22 @@ describe('formatHeroSectionWidget — CAL-27 static variant', () => {
     expect(c.goalType).toBe('static');
     expect(c.goal).toBe(2000);
     expect(c.burn).toBe(0);
-    expect(c.effectiveTarget).toBe(2000);
     expect(c.consumed).toBe(800);
-    expect(c.baselineGoal).toBeUndefined();
-    expect(c.stepBonus).toBeUndefined();
-    expect(c.workoutBonus).toBeUndefined();
-    expect(c.todaysGoal).toBeUndefined();
-    expect(c.breakdown).toBeUndefined();
+    expect(c.dynamic).toBeNull();
+    expect(c.effectiveTarget).toBeUndefined();
+  });
+
+  test('catch-block fallback (HeroBriefService throws) → goalType=static, dynamic=null', async () => {
+    HeroBriefService.getOrGenerateBrief.mockRejectedValueOnce(new Error('brief boom'));
+    const widget = await AppFormatService.formatHeroSectionWidget(
+      'user1', '2026-05-03', { ...baseTodayData },
+      baseGoals, 'morning', false, false, null
+    );
+    const c = widget.widgetData.calories;
+    expect(c.goalType).toBe('static');
+    expect(c.burn).toBe(0);
+    expect(c.dynamic).toBeNull();
+    expect(c.goal).toBe(2000);
   });
 });
 
@@ -76,7 +87,7 @@ describe('formatHeroSectionWidget — CAL-28 dynamic variant', () => {
     }
   };
 
-  test('dynamic → goal=todaysGoal, burn=0, breakdown fields present', async () => {
+  test('dynamic → goal=todaysGoal, burn=0, dynamic block carries full payload', async () => {
     const widget = await AppFormatService.formatHeroSectionWidget(
       'user1', '2026-05-03', { ...baseTodayData },
       baseGoals, 'morning', false, false, dynamicGoal
@@ -84,27 +95,42 @@ describe('formatHeroSectionWidget — CAL-28 dynamic variant', () => {
     const c = widget.widgetData.calories;
     expect(c.goalType).toBe('dynamic');
     expect(c.goal).toBe(2050);
-    expect(c.effectiveTarget).toBe(2050);
     expect(c.burn).toBe(0);
-    expect(c.baselineGoal).toBe(1900);
-    expect(c.stepBonus).toBe(60);
-    expect(c.workoutBonus).toBe(90);
-    expect(c.bonusApplied).toBe(150);
-    expect(c.capped).toBe(false);
-    expect(c.todaysGoal).toBe(2050);
-    expect(c.breakdown).toEqual(dynamicGoal.breakdown);
+    expect(c.dynamic).toEqual(dynamicGoal);
   });
 
-  test('dynamic capped day → capped=true is preserved', async () => {
+  test('dynamic capped day → capped=true preserved on the dynamic sub-object', async () => {
     const capped = { ...dynamicGoal, capped: true, bonusApplied: 950, todaysGoal: 2850 };
     const widget = await AppFormatService.formatHeroSectionWidget(
       'user1', '2026-05-03', { ...baseTodayData },
       baseGoals, 'morning', false, false, capped
     );
     const c = widget.widgetData.calories;
-    expect(c.capped).toBe(true);
-    expect(c.bonusApplied).toBe(950);
-    expect(c.todaysGoal).toBe(2850);
     expect(c.goal).toBe(2850);
+    expect(c.dynamic.capped).toBe(true);
+    expect(c.dynamic.bonusApplied).toBe(950);
+    expect(c.dynamic.todaysGoal).toBe(2850);
+  });
+
+  test('dynamic zero-bonus day → todaysGoal===baselineGoal and dynamic block still emitted', async () => {
+    const zeroBonus = {
+      baselineGoal: 1900,
+      stepBonus: 0,
+      workoutBonus: 0,
+      bonusApplied: 0,
+      capped: false,
+      todaysGoal: 1900,
+      breakdown: { netSteps: 0, workouts: [] }
+    };
+    const widget = await AppFormatService.formatHeroSectionWidget(
+      'user1', '2026-05-03', { ...baseTodayData },
+      baseGoals, 'morning', false, false, zeroBonus
+    );
+    const c = widget.widgetData.calories;
+    expect(c.goalType).toBe('dynamic');
+    expect(c.goal).toBe(1900);
+    expect(c.dynamic.bonusApplied).toBe(0);
+    expect(c.dynamic.baselineGoal).toBe(1900);
+    expect(c.dynamic.todaysGoal).toBe(1900);
   });
 });
