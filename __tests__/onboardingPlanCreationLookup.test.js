@@ -11,11 +11,14 @@ const mongoose = require('mongoose');
 const Question = require('../models/schemas/Question');
 const OnboardingService = require('../services/onboardingService');
 
-function makeFindStub(rows) {
+function makeFindStub(rows, capturedProjections) {
   // Question.find returns a Query that supports .sort().select().lean().
   return {
     sort: jest.fn().mockReturnThis(),
-    select: jest.fn().mockReturnThis(),
+    select: jest.fn(function (proj) {
+      if (capturedProjections) capturedProjections.push(proj);
+      return this;
+    }),
     lean: jest.fn().mockResolvedValue(rows),
   };
 }
@@ -23,15 +26,17 @@ function makeFindStub(rows) {
 describe("getActiveQuestions('PLAN_CREATION') — lookup wiring", () => {
   let findSpy;
   let capturedFilters;
+  let capturedProjections;
 
   beforeEach(() => {
     capturedFilters = [];
+    capturedProjections = [];
     findSpy = jest.spyOn(Question, 'find').mockImplementation((filter) => {
       capturedFilters.push(filter);
       // First call is the plan chain, second is end questions. Return shapes
       // that let the chained .sort().select().lean() resolve to []. Tests
       // inspect the captured filters, not the return rows.
-      return makeFindStub([]);
+      return makeFindStub([], capturedProjections);
     });
   });
 
@@ -114,6 +119,17 @@ describe("getActiveQuestions('PLAN_CREATION') — lookup wiring", () => {
       '6908fe66896ccf24778c9085', // GOAL_CALCULATION
       '6908fe66896ccf24778c9086', // PLAN_SUMMARY
     ]);
+  });
+
+  test('CAL-30: every projection includes `slug` so clients receive stable identity', async () => {
+    await OnboardingService.getActiveQuestions('PLAN_CREATION');
+
+    // Two .select() calls: one for the plan chain, one for end questions.
+    expect(capturedProjections).toHaveLength(2);
+    for (const proj of capturedProjections) {
+      expect(typeof proj).toBe('string');
+      expect(proj.split(/\s+/)).toEqual(expect.arrayContaining(['_id', 'slug']));
+    }
   });
 
   test('every $in entry is a real ObjectId (not a string slipping through)', async () => {

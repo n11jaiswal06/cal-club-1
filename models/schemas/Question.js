@@ -228,6 +228,22 @@ const questionSchema = new mongoose.Schema({
     unique: true,
     min: 1
   },
+  // CAL-30: stable, content-derived identity for canonical onboarding
+  // questions (e.g. 'goal_type', 'rate_loss'). Backfilled by
+  // scripts/backfill_question_slugs.js using content fingerprints, then
+  // owned by the question forever. Migrations and lookup code prefer slug
+  // over _id pinning or sequence pinning so fresh deploys / CI / DR
+  // restores resolve canonical questions identically to long-lived envs.
+  // Optional — only canonical questions get a slug; ad-hoc questions stay
+  // sluggless (the sparse index excludes missing values from the
+  // uniqueness constraint).
+  slug: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    match: /^[a-z][a-z0-9_]*$/,
+    maxlength: 64
+  },
   isActive: {
     type: Boolean,
     default: true
@@ -238,5 +254,9 @@ const questionSchema = new mongoose.Schema({
 
 // Indexes
 questionSchema.index({ isActive: 1, sequence: 1 });
+questionSchema.index(
+  { slug: 1 },
+  { unique: true, sparse: true, name: 'slug_unique_sparse' }
+);
 
 module.exports = mongoose.model('Question', questionSchema, 'questions');

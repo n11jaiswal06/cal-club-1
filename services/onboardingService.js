@@ -192,7 +192,7 @@ class OnboardingService {
           _id: notificationQuestionId,
           isActive: true
         })
-          .select('_id text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
+          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
           .lean();
         
         return question ? [question] : [];
@@ -267,7 +267,7 @@ class OnboardingService {
           isActive: true,
         })
           .sort({ sequence: 1 })
-          .select('_id text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
+          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
           .lean();
 
         // Fetch end questions
@@ -276,7 +276,7 @@ class OnboardingService {
           isActive: true
         })
           .sort({ sequence: 1 })
-          .select('_id text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
+          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
           .lean();
 
         // Combine: plan questions first, then end questions
@@ -286,7 +286,7 @@ class OnboardingService {
       // Default behavior: return all active questions
       return await Question.find({ isActive: true })
         .sort({ sequence: 1 })
-        .select('_id text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf');
+        .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf');
     } catch (error) {
       throw new Error(`Failed to fetch active questions: ${error.message}`);
     }

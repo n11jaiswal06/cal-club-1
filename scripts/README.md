@@ -2,6 +2,85 @@
 
 ETL scripts for importing nutrition data from USDA FoodData Central and IFCT 2017 databases.
 
+---
+
+## Question identity (CAL-30)
+
+Canonical onboarding questions are now identified by a content-derived
+`slug` (e.g. `goal_type`, `rate_loss`) rather than by raw Mongo `_id` hex
+or by `sequence` number. This solves the failure mode where fresh deploys
+/ CI in-memory Mongo / DR restores mint different `_id`s and silently
+drop pinned questions from the chain.
+
+### Backfill an existing DB
+
+Run once per environment after deploying the schema change:
+
+```bash
+node Backend/scripts/backfill_question_slugs.js          # dry-run
+node Backend/scripts/backfill_question_slugs.js --apply  # persist
+```
+
+Idempotent. The script finds canonical questions by content fingerprint
+(NOT by `_id`) and refuses to overwrite an existing slug or to guess
+when multiple docs match a fingerprint.
+
+### Lookup ladder for new migrations
+
+When a migration needs to identify a canonical question, follow this
+order — each rung is a fallback if the previous one returns nothing:
+
+1. **`Question.findOne({ slug, isActive: true })`** — primary identity.
+2. **`Question.findById(PINNED_ID)`** — only if the question still has a
+   hardcoded `_id` pin in production code (e.g. CAL-9's bloc pin). Drop
+   this rung once the pin is retired.
+3. **`Question.findOne({ sequence })`** + content-shape guard — historical
+   fallback for envs that ran the seed but not yet the slug backfill.
+4. **Pure content fingerprint** — last-ditch single-match check.
+5. **Fail loud** — `throw` rather than upsert into a wrong row.
+
+### Upsert pattern
+
+Always upsert by `slug` and include both `slug` and `sequence` in `$set`:
+
+```js
+{
+  filter: { slug: 'rate_loss' },
+  update: {
+    $set: {
+      slug: 'rate_loss',     // ← stable identity
+      sequence: 13.3,        // ← FE chain ordering
+      text: '…',
+      type: 'SELECT',
+      // …other fields
+    },
+  },
+  upsert: true,
+}
+```
+
+### Pre-flight guard
+
+If your migration upserts by slug and the DB already has rows that were
+seeded under the legacy `sequence`-keyed filter, the slug filter would
+not match and would create duplicates. Add a pre-flight check that
+detects `findOne({ slug })` is null while `findOne({ sequence })` is not,
+and abort with a runbook line pointing at `backfill_question_slugs.js`.
+See `assertSlugBackfillRun()` in `migrate_onboarding_cal18.js` for the
+reference implementation.
+
+### Migrations still on the legacy pattern
+
+These migrations pre-mint stable `_id`s in-script, so they don't exhibit
+CAL-30's failure mode and were deliberately left on the legacy lookup.
+Retrofit opportunistically when next touched:
+
+- `migrate_onboarding_cal24.js`
+- `migrate_onboarding_cal35.js`
+- `migrate_onboarding_cal35_section_d.js`
+
+---
+
 ## Prerequisites
 
 ```bash
