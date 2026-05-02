@@ -103,7 +103,10 @@ class OnboardingController {
       const body = data || {};
       const { type, answers } = body;
 
-      if (type !== undefined && type !== null && !ALLOWED_QUESTION_TYPES.has(type)) {
+      // Treat null and empty string as "omitted" — both are reasonable client
+      // shorthands for "no filter, return every active question."
+      const normalizedType = type === '' ? null : type;
+      if (normalizedType !== undefined && normalizedType !== null && !ALLOWED_QUESTION_TYPES.has(normalizedType)) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           success: false,
@@ -138,7 +141,7 @@ class OnboardingController {
       }
 
       try {
-        const questions = await OnboardingService.getActiveQuestions(type || null);
+        const questions = await OnboardingService.getActiveQuestions(normalizedType || null);
         const annotated = evaluateApplicability(questions, answers);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });

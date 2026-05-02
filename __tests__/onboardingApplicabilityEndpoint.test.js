@@ -248,4 +248,11 @@ describe('POST /onboarding/questions/applicability — validation', () => {
     expect(statusCode).toBe(200);
     expect(body.success).toBe(true);
   });
+
+  test('accepts empty-string type as omitted', async () => {
+    await seedGoalChain();
+    const { statusCode, body } = await callApplicability({ type: '', answers: [] });
+    expect(statusCode).toBe(200);
+    expect(body.success).toBe(true);
+  });
 });

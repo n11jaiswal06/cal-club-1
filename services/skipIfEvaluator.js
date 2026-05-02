@@ -115,11 +115,4 @@ function evaluateApplicability(questions, answers) {
 module.exports = {
   evaluateApplicability,
   isQuestionApplicable,
-  // exported for tests
-  _internal: {
-    buildAnswersByQuestionId,
-    buildOptionsByQuestionId,
-    ruleMatches,
-    toIdString,
-  },
 };

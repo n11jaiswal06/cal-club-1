@@ -290,6 +290,40 @@ describe('skipIfEvaluator — semantics edge cases', () => {
     expect(result.find((q) => q.slug === 'legacy_dependent').applicable).toBe(false);
   });
 
+  test('multi-value prior answer: rule matches if any value is in valueIn', () => {
+    // Forward-compatibility for multi-select onboarding questions: a prior
+    // answer's `values` array can carry more than one entry, and the rule
+    // matches when *any* of those values intersects valueIn.
+    const multiQuestion = {
+      _id: oid('6908fe66896ccf24778c9106'),
+      slug: 'multi_select_source',
+      options: [
+        { text: 'Strength', value: 'strength' },
+        { text: 'Cardio', value: 'cardio' },
+        { text: 'Yoga', value: 'yoga' },
+      ],
+      skipIf: [],
+    };
+    const dependent = {
+      _id: oid('6908fe66896ccf24778c9107'),
+      slug: 'multi_dependent',
+      options: [],
+      skipIf: [
+        // Skip the dependent question if the user picked cardio (alongside anything else).
+        { questionId: multiQuestion._id, valueIn: ['cardio'], textIn: [] },
+      ],
+    };
+    const result = evaluateApplicability([multiQuestion, dependent], [
+      { questionId: multiQuestion._id.toString(), values: ['strength', 'cardio'] },
+    ]);
+    expect(result.find((q) => q.slug === 'multi_dependent').applicable).toBe(false);
+
+    const noMatch = evaluateApplicability([multiQuestion, dependent], [
+      { questionId: multiQuestion._id.toString(), values: ['strength', 'yoga'] },
+    ]);
+    expect(noMatch.find((q) => q.slug === 'multi_dependent').applicable).toBe(true);
+  });
+
   test('rule with both valueIn and textIn empty is a no-op', () => {
     const question = {
       _id: oid('6908fe66896ccf24778c9105'),
