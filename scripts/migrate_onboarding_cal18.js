@@ -28,9 +28,23 @@ require('dotenv').config();
 
 const Question = require('../models/schemas/Question');
 
+// CAL-30: identity story.
+//   Q10 (goal type) and Q13a/b/c (rate questions) used to be pinned by
+//   raw Mongo _id (CAL-9) and by `sequence` respectively. Both are
+//   environment-fragile: fresh Mongo / CI / DR mints different _ids, and
+//   sequence numbers drift. The canonical identity is now `slug`
+//   (`goal_type`, `rate_loss`, `rate_gain`, `recomp_expectation`),
+//   backfilled by scripts/backfill_question_slugs.js.
+//
+//   On any DB that has already run this migration once, the slug
+//   backfill MUST run before re-applying — otherwise the slug-based
+//   upsert filter will not match the existing rows and would create
+//   duplicates. This script's pre-flight guard (assertSlugBackfillRun)
+//   detects that condition and aborts with a runbook line.
+//
 // CAL-9 pin: lib/blocs/onboarding/onboarding_bloc.dart pins the goal-type
-// question to this _id. The migration updates it in place by _id so the
-// pin keeps working.
+// question to this _id. The migration still falls back to _id lookup so
+// the pin keeps working on environments that haven't backfilled slugs.
 const GOAL_TYPE_PINNED_ID = '6908fe66896ccf24778c907d';
 
 const Q10_GOAL_OPTIONS = [
@@ -165,24 +179,101 @@ function looksLikeGoalQuestion(doc) {
   });
 }
 
+// CAL-30 lookup ladder for the goal-type question, ordered most-stable
+// first. Each rung is more permissive than the last; the script throws
+// rather than silently upserting into a wrong row when nothing matches.
+//
+//   1. slug='goal_type'        — the canonical identity (post-backfill).
+//   2. pinned _id              — CAL-9 Flutter bloc compatibility on
+//                                 long-lived envs that minted the
+//                                 canonical _id during their first seed.
+//   3. sequence:10 + fingerprint — historical fallback for envs that
+//                                 ran the seed but never backfilled
+//                                 slugs and where the pinned _id wasn't
+//                                 minted (e.g. first-time fresh DB).
+//   4. content fingerprint      — last-ditch: any active SELECT-shaped
+//                                 doc with goal-style options. Requires
+//                                 exactly one match to avoid picking
+//                                 the wrong question.
 async function findGoalQuestion() {
-  // Prefer the pinned _id so the Flutter bloc pin keeps working.
-  let q;
+  // (1) slug — primary identity once backfill has run anywhere.
+  let q = await Question.findOne({ slug: 'goal_type', isActive: true });
+  if (q) return { q, foundBy: 'slug=goal_type' };
+
+  // (2) pinned _id — CAL-9 compat for envs minted with the canonical id.
   if (mongoose.isValidObjectId(GOAL_TYPE_PINNED_ID)) {
     q = await Question.findById(GOAL_TYPE_PINNED_ID);
   }
   if (q) return { q, foundBy: 'pinned-id' };
 
-  // Fallback by sequence is risky on reordered DBs, so verify by
-  // fingerprint before treating the result as the goal question.
+  // (3) sequence:10 with shape guard. The dev DB has been reordered in
+  // the past; without the fingerprint check this can match the wrong
+  // question entirely.
   q = await Question.findOne({ sequence: 10 });
-  if (q && !looksLikeGoalQuestion(q)) {
+  if (q && looksLikeGoalQuestion(q)) {
+    return { q, foundBy: 'sequence-10' };
+  }
+  if (q) {
+    console.log(
+      `  ⚠ sequence:10 doc rejected by fingerprint ("${q.text}" — not goal-shaped). Trying content fallback.`
+    );
+  }
+
+  // (4) Content fingerprint — pick the only active goal-shaped SELECT
+  // in the collection. Requires exactly one match; ambiguity = abort.
+  const candidates = await Question.find({
+    isActive: true,
+    type: { $in: ['SELECT', 'select'] },
+  });
+  const goalShaped = candidates.filter(looksLikeGoalQuestion);
+  if (goalShaped.length === 1) {
+    return { q: goalShaped[0], foundBy: 'fingerprint' };
+  }
+  if (goalShaped.length > 1) {
     return {
       q: null,
-      foundBy: `sequence-10-rejected (doc at seq 10 is "${q.text}" — not goal-shaped)`,
+      foundBy: `ambiguous-fingerprint (${goalShaped.length} candidates: ${goalShaped
+        .map((c) => c._id)
+        .join(', ')})`,
     };
   }
-  return { q, foundBy: q ? 'sequence-10' : 'not-found' };
+
+  return { q: null, foundBy: 'not-found' };
+}
+
+// CAL-30 pre-flight: detect a previously-migrated DB that hasn't yet had
+// the slug backfill run against it. If the (slug, sequence) check finds
+// a sequence row but no matching slug row, an --apply re-run would treat
+// the slug-keyed upsert filter as "no match" and INSERT a duplicate.
+// Abort with the runbook line instead.
+async function assertSlugBackfillRun() {
+  const checks = [
+    { slug: 'rate_loss', sequence: 13.3 },
+    { slug: 'rate_gain', sequence: 13.5 },
+    { slug: 'recomp_expectation', sequence: 13.7 },
+  ];
+  const stale = [];
+  for (const { slug, sequence } of checks) {
+    const bySlug = await Question.findOne({ slug });
+    if (bySlug) continue;
+    const bySeq = await Question.findOne({ sequence });
+    if (bySeq) {
+      stale.push({ slug, sequence, _id: bySeq._id, text: bySeq.text });
+    }
+  }
+  if (stale.length === 0) return;
+
+  console.error(
+    '\n✗ Detected previously-migrated rows missing slugs. Run:\n' +
+    '    node scripts/backfill_question_slugs.js --apply\n' +
+    '  before re-running this migration. Aborting to avoid creating duplicate rows.\n'
+  );
+  for (const s of stale) {
+    console.error(
+      `    seq=${s.sequence} ("${s.text}") has no slug=${s.slug} — would duplicate on upsert.`
+    );
+  }
+  throw new Error('Slug backfill required before re-applying this migration.');
 }
 
 // Find a question by text pattern. The dev DB has been reordered (Q10
@@ -229,12 +320,19 @@ function isStandaloneTransactionError(err) {
 async function migrate({ apply }) {
   console.log(`\n--- CAL-18 onboarding migration (${apply ? 'APPLY' : 'DRY-RUN'}) ---\n`);
 
+  // 0) CAL-30 pre-flight: refuse to run on a DB that has the rate
+  // questions seeded by sequence but missing the matching slug — the
+  // upsert filters below would create duplicates.
+  await assertSlugBackfillRun();
+
   // 1) Find the goal-type question (Q10).
   const { q: goalQ, foundBy } = await findGoalQuestion();
   if (!goalQ) {
     console.error(
-      '✗ Goal-type question not found by _id pin or sequence:10. Run the original ' +
-      'seed (onboarding_questions_mongodb.js) first, then re-run this migration.'
+      '✗ Goal-type question not found by slug, _id pin, sequence:10, or ' +
+      'fingerprint. Run the original seed (onboarding_questions_mongodb.js) ' +
+      "first, then run scripts/backfill_question_slugs.js, then re-run this " +
+      'migration. (Lookup result: ' + foundBy + ')'
     );
     process.exit(1);
   }
@@ -364,6 +462,11 @@ async function migrate({ apply }) {
         subtext: 'Choose the goal that best describes what you want to achieve.',
         type: 'SELECT',
         options: Q10_GOAL_OPTIONS,
+        // CAL-30: ensure slug is set on the goal question even on envs
+        // that haven't run the backfill script (e.g. fresh DBs where
+        // findGoalQuestion resolved by sequence/_id pin/fingerprint).
+        // No-op when slug is already set to 'goal_type'.
+        slug: 'goal_type',
       },
     },
     upsert: false,
@@ -395,15 +498,19 @@ async function migrate({ apply }) {
     });
   }
 
-  // Q13a (loss rate) is always inserted/upserted at a stable sequence
-  // (13.3) — independent of whatever the dev DB had at the old "weekly
-  // rate" slot. If an old rate question is found by fingerprint, we
-  // deactivate it so the new flow surfaces only the new presets.
+  // CAL-30: Q13a/b/c are upserted by `slug` (stable identity) instead of
+  // `sequence`. The pre-flight guard upstream guarantees that any
+  // previously-seq-13.3-seeded row already carries `slug=rate_loss` (via
+  // backfill_question_slugs.js), so the slug filter matches in place.
+  // `sequence` stays in $set because PLAN_CREATION still sorts by it and
+  // the FE chain depends on the numeric ordering.
   ops.push({
     label: 'Q13a loss rate — preset options + skipIf non-lose (NEW)',
-    filter: { sequence: 13.3 },
+    filter: { slug: 'rate_loss' },
     update: {
       $set: {
+        slug: 'rate_loss',
+        sequence: 13.3,
         text: 'How fast do you want to lose weight?',
         subtext: 'Pick a pace you can stick with.',
         type: 'SELECT',
@@ -443,9 +550,11 @@ async function migrate({ apply }) {
 
   ops.push({
     label: 'Q13b gain rate — preset options + skipIf non-gain (NEW)',
-    filter: { sequence: 13.5 },
+    filter: { slug: 'rate_gain' },
     update: {
       $set: {
+        slug: 'rate_gain',
+        sequence: 13.5,
         text: 'How fast do you want to gain weight?',
         subtext: 'Pick a pace you can stick with.',
         type: 'SELECT',
@@ -459,10 +568,11 @@ async function migrate({ apply }) {
 
   ops.push({
     label: 'Q13c recomp expectation INFO_SCREEN (NEW)',
-    filter: { sequence: 13.7 },
+    filter: { slug: 'recomp_expectation' },
     update: {
       $set: {
         ...Q13C_RECOMP_INFO,
+        slug: 'recomp_expectation',
         skipIf: goalSkipIfNotRecomp,
       },
     },
@@ -535,14 +645,15 @@ async function migrate({ apply }) {
 
   console.log('\n✓ Migration complete.\n');
 
-  // 5) Verify final state. Q13a is the upserted-by-sequence loss-rate doc
-  //    at 13.3 — NOT the deactivated old rate question (rateQ).
+  // 5) Verify final state. Q13a/b/c are now keyed by slug (CAL-30) — the
+  //    deactivated rateQ would never match these slugs, so a slug lookup
+  //    cannot accidentally surface the old row.
   const finalGoal = await Question.findById(goalQ._id).lean();
   const q11 = targetWeightQ ? await Question.findById(targetWeightQ._id).lean() : null;
   const q12 = encouragementQ ? await Question.findById(encouragementQ._id).lean() : null;
-  const q13a = await Question.findOne({ sequence: 13.3 }).lean();
-  const q13b = await Question.findOne({ sequence: 13.5 }).lean();
-  const q13c = await Question.findOne({ sequence: 13.7 }).lean();
+  const q13a = await Question.findOne({ slug: 'rate_loss' }).lean();
+  const q13b = await Question.findOne({ slug: 'rate_gain' }).lean();
+  const q13c = await Question.findOne({ slug: 'recomp_expectation' }).lean();
 
   console.log('--- Final state ---');
   console.log(
@@ -568,8 +679,17 @@ async function main() {
   }
 }
 
-main().catch(async (err) => {
-  console.error('\n✗ Migration failed:', err);
-  await mongoose.disconnect().catch(() => {});
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(async (err) => {
+    console.error('\n✗ Migration failed:', err);
+    await mongoose.disconnect().catch(() => {});
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  GOAL_TYPE_PINNED_ID,
+  looksLikeGoalQuestion,
+  findGoalQuestion,
+  assertSlugBackfillRun,
+};
