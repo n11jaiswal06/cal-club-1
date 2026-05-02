@@ -123,6 +123,30 @@ describe('SLUG_DEFINITIONS — fingerprint behaviour', () => {
     });
   });
 
+  describe('target_weight', () => {
+    const fp = defBySlug('target_weight').fingerprint;
+
+    test("matches the seeded NUMBER-type 'target weight (kg)' question", () => {
+      expect(
+        fp({ type: 'NUMBER', text: "What's your target weight (kg)?" })
+      ).toBe(true);
+    });
+
+    test('also accepts PICKER and the legacy lowercase `number` type', () => {
+      expect(fp({ type: 'PICKER', text: 'Set your target weight' })).toBe(true);
+      expect(fp({ type: 'number', text: 'target weight kg' })).toBe(true);
+    });
+
+    test('rejects an INFO_SCREEN that merely mentions "target weight"', () => {
+      expect(
+        fp({
+          type: 'INFO_SCREEN',
+          text: 'Why your target weight matters',
+        })
+      ).toBe(false);
+    });
+  });
+
   describe('recomp_expectation', () => {
     const fp = defBySlug('recomp_expectation').fingerprint;
 

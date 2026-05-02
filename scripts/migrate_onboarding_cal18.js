@@ -27,6 +27,11 @@ const mongoose = require('mongoose');
 require('dotenv').config();
 
 const Question = require('../models/schemas/Question');
+// CAL-30: single source of truth for the goal-question shape predicate.
+// Both the backfill and this migration use the same fingerprint so the
+// rungs that depend on it (sequence:10 guard + last-ditch find filter)
+// can never disagree about whether a doc "looks like" Q10.
+const { looksLikeGoalQuestion } = require('./backfill_question_slugs');
 
 // CAL-30: identity story.
 //   Q10 (goal type) and Q13a/b/c (rate questions) used to be pinned by
@@ -165,20 +170,6 @@ function buildGoalSkipIf(goalQuestionId, valueIn) {
   ];
 }
 
-// Heuristic: a doc is plausibly the goal-type question if its options
-// include text matching any of the legacy/new goal labels. Cheap guard
-// against the sequence:10 fallback overwriting an unrelated question
-// (the dev DB was reordered, so blind sequence matching is unsafe).
-function looksLikeGoalQuestion(doc) {
-  const options = Array.isArray(doc?.options) ? doc.options : [];
-  if (options.length < 2) return false;
-  const goalRegex = /(lose|gain|maintain|recomp|weight|muscle)/i;
-  return options.some((opt) => {
-    const text = typeof opt === 'string' ? opt : opt?.text;
-    return typeof text === 'string' && goalRegex.test(text);
-  });
-}
-
 // CAL-30 lookup ladder for the goal-type question, ordered most-stable
 // first. Each rung is more permissive than the last; the script throws
 // rather than silently upserting into a wrong row when nothing matches.
@@ -221,10 +212,12 @@ async function findGoalQuestion() {
 
   // (4) Content fingerprint — pick the only active goal-shaped SELECT
   // in the collection. Requires exactly one match; ambiguity = abort.
+  // .lean() — the predicate only reads plain fields, so skip Mongoose
+  // hydration.
   const candidates = await Question.find({
     isActive: true,
     type: { $in: ['SELECT', 'select'] },
-  });
+  }).lean();
   const goalShaped = candidates.filter(looksLikeGoalQuestion);
   if (goalShaped.length === 1) {
     return { q: goalShaped[0], foundBy: 'fingerprint' };
@@ -689,6 +682,8 @@ if (require.main === module) {
 
 module.exports = {
   GOAL_TYPE_PINNED_ID,
+  // Re-exported from backfill_question_slugs.js so callers that imported it
+  // from cal18 continue to work after the dedup.
   looksLikeGoalQuestion,
   findGoalQuestion,
   assertSlugBackfillRun,

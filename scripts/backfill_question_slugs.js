@@ -115,7 +115,13 @@ const SLUG_DEFINITIONS = [
   {
     slug: 'target_weight',
     description: "Q11 — What's your target weight (kg)?",
-    fingerprint: (doc) => textMatches(doc, /target weight/i),
+    // Tightened with a numeric-input type guard so a future info screen
+    // or follow-up that mentions "target weight" can't trip AMBIGUOUS.
+    // Seed sets type='NUMBER'; allow PICKER and the legacy lowercase
+    // 'number' for resilience against past variants.
+    fingerprint: (doc) =>
+      textMatches(doc, /target weight/i) &&
+      ['NUMBER', 'number', 'PICKER', 'picker'].includes(doc?.type),
   },
   {
     slug: 'rate_loss',

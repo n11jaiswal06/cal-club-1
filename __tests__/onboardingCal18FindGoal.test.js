@@ -99,7 +99,9 @@ describe('findGoalQuestion — CAL-30 lookup ladder', () => {
     });
     findByIdSpy = jest.spyOn(Question, 'findById').mockResolvedValue(null);
     // (4) fingerprint-only with no candidates → not-found.
-    findSpy = jest.spyOn(Question, 'find').mockResolvedValue([]);
+    findSpy = jest
+      .spyOn(Question, 'find')
+      .mockReturnValue({ lean: jest.fn().mockResolvedValue([]) });
 
     const { q, foundBy } = await findGoalQuestion();
 
@@ -111,7 +113,9 @@ describe('findGoalQuestion — CAL-30 lookup ladder', () => {
     const doc = goalShapedDoc({ sequence: 9 }); // sequence drift — not at 10
     findOneSpy = jest.spyOn(Question, 'findOne').mockResolvedValue(null);
     findByIdSpy = jest.spyOn(Question, 'findById').mockResolvedValue(null);
-    findSpy = jest.spyOn(Question, 'find').mockResolvedValue([doc]);
+    findSpy = jest
+      .spyOn(Question, 'find')
+      .mockReturnValue({ lean: jest.fn().mockResolvedValue([doc]) });
 
     const { q, foundBy } = await findGoalQuestion();
 
@@ -122,10 +126,12 @@ describe('findGoalQuestion — CAL-30 lookup ladder', () => {
   test('(4) ambiguous fingerprint (>1 match) returns null with diagnostic', async () => {
     findOneSpy = jest.spyOn(Question, 'findOne').mockResolvedValue(null);
     findByIdSpy = jest.spyOn(Question, 'findById').mockResolvedValue(null);
-    findSpy = jest.spyOn(Question, 'find').mockResolvedValue([
-      goalShapedDoc({ _id: 'a' }),
-      goalShapedDoc({ _id: 'b' }),
-    ]);
+    findSpy = jest.spyOn(Question, 'find').mockReturnValue({
+      lean: jest.fn().mockResolvedValue([
+        goalShapedDoc({ _id: 'a' }),
+        goalShapedDoc({ _id: 'b' }),
+      ]),
+    });
 
     const { q, foundBy } = await findGoalQuestion();
 
@@ -136,7 +142,9 @@ describe('findGoalQuestion — CAL-30 lookup ladder', () => {
   test('(5) all rungs fail → returns not-found (caller fails loud)', async () => {
     findOneSpy = jest.spyOn(Question, 'findOne').mockResolvedValue(null);
     findByIdSpy = jest.spyOn(Question, 'findById').mockResolvedValue(null);
-    findSpy = jest.spyOn(Question, 'find').mockResolvedValue([]);
+    findSpy = jest
+      .spyOn(Question, 'find')
+      .mockReturnValue({ lean: jest.fn().mockResolvedValue([]) });
 
     const { q, foundBy } = await findGoalQuestion();
 
