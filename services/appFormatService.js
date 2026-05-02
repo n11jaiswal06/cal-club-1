@@ -154,9 +154,15 @@ class AppFormatService {
       const exerciseBurn = await buildExerciseBurnContext(userId, istDateStr);
       todayData.exerciseBurn = exerciseBurn.totalCalories;
 
+      // CAL-27/28: dynamic-goal block for the hero tile. Returns null for
+      // static users or dynamic users missing baselineGoal/rmr — the
+      // hero formatter falls through to the static rendering in those
+      // cases. Only computed for today; past-day hero is static-only.
+      const dynamicGoal = isPastDay ? null : await buildTodaysGoal(user, istDateStr);
+
       // --- Hero section ---
       const heroSectionWidget = await this.formatHeroSectionWidget(
-        userId, date, todayData, goals, clientPhase, regenerate, isPastDay
+        userId, date, todayData, goals, clientPhase, regenerate, isPastDay, dynamicGoal
       );
 
       // Format the response
@@ -348,7 +354,7 @@ class AppFormatService {
    *
    * For past days, returns only the Evening Wrap with no phase tabs.
    */
-  static async formatHeroSectionWidget(userId, date, todayData, goals, clientPhase, regenerate, isPastDay) {
+  static async formatHeroSectionWidget(userId, date, todayData, goals, clientPhase, regenerate, isPastDay, dynamicGoal = null) {
     try {
       let showPhaseTabs;
       let activePhaseTabs;
@@ -393,21 +399,35 @@ class AppFormatService {
         });
       }
 
-      // Compute effective target (goal + exercise burn)
-      const exerciseBurn = todayData.exerciseBurn || 0;
-      const effectiveTarget = goals.dailyCalories + exerciseBurn;
+      // CAL-27/28: hero calorie tile. Static users get a single goal
+      // number (no burn additive — the activity multiplier already
+      // accounts for typical daily burn). Dynamic users get
+      // baseline + activity_bonus = today's_goal, with breakdown for
+      // an optional UI subline. `burn` stays in the payload as 0 for
+      // back-compat with older clients that still draw the marker.
+      const calories = {
+        consumed: parseFloat(todayData.totalCalories.toFixed(2)),
+        goal: dynamicGoal ? dynamicGoal.todaysGoal : goals.dailyCalories,
+        burn: 0,
+        effectiveTarget: dynamicGoal ? dynamicGoal.todaysGoal : goals.dailyCalories,
+        goalType: dynamicGoal ? 'dynamic' : 'static'
+      };
+      if (dynamicGoal) {
+        calories.baselineGoal = dynamicGoal.baselineGoal;
+        calories.stepBonus = dynamicGoal.stepBonus;
+        calories.workoutBonus = dynamicGoal.workoutBonus;
+        calories.bonusApplied = dynamicGoal.bonusApplied;
+        calories.capped = dynamicGoal.capped;
+        calories.todaysGoal = dynamicGoal.todaysGoal;
+        calories.breakdown = dynamicGoal.breakdown;
+      }
 
       return {
         widgetType: 'hero_section',
         widgetData: {
           showPhaseTabs,
           activePhaseTabs,
-          calories: {
-            consumed: parseFloat(todayData.totalCalories.toFixed(2)),
-            goal: goals.dailyCalories,
-            burn: exerciseBurn,
-            effectiveTarget
-          },
+          calories,
           protein: {
             consumed: parseFloat(todayData.totalProtein.toFixed(2)),
             goal: goals.dailyProtein
@@ -429,7 +449,8 @@ class AppFormatService {
             consumed: parseFloat((todayData?.totalCalories || 0).toFixed(2)),
             goal: goals?.dailyCalories || 2000,
             burn: 0,
-            effectiveTarget: goals?.dailyCalories || 2000
+            effectiveTarget: goals?.dailyCalories || 2000,
+            goalType: 'static'
           },
           protein: {
             consumed: parseFloat((todayData?.totalProtein || 0).toFixed(2)),
