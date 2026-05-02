@@ -815,11 +815,15 @@ class GoalService {
    * impact; revisit if a future health-sync surface adds per-workout step
    * counts. See CAL-23 plan for details.
    *
-   * Workout bonus subtracts BMR-during-workout (rmr/1440 × duration_min)
-   * from each workout's gross calories before applying the 50% haircut, so
-   * we don't credit users for kcal they would have burned at rest anyway.
-   * The max(0, …) guard zeroes degenerate cases (low-MET workout reporting
-   * fewer kcal than rest BMR for the duration).
+   * Workout bonus is `kcal × 0.5` per workout — half of what was burned.
+   * The 50% haircut is the user-facing model ("you eat back half of what
+   * you earn"). We deliberately do NOT subtract BMR-during-workout: HealthKit
+   * reports active_calories that's already net of BMR (subtracting again
+   * would double-count and under-credit), and manual MET-based logs include
+   * BMR (a small over-credit absorbed by the haircut). The asymmetry is
+   * smaller than the noise in MET tables and Apple's energy estimates, and
+   * the simpler mental model — "half of what you burn" — is worth more
+   * than a ~30-50 kcal source-asymmetry.
    *
    * Pure / deterministic / idempotent — same inputs always produce the
    * same output, no I/O.
@@ -832,8 +836,10 @@ class GoalService {
    * @param {Array<{calories_burned:number, duration_min:number}>} params.workouts
    *   Today's workouts. Items missing or with non-finite calories_burned /
    *   duration_min contribute 0.
-   * @param {number} params.rmrPerDay - User's Mifflin-St Jeor RMR in
-   *   kcal/day (User.goals.rmr).
+   * @param {number} [params.rmrPerDay] - User's Mifflin-St Jeor RMR in
+   *   kcal/day (User.goals.rmr). Currently unused — retained in the
+   *   signature for backward compatibility with callers and in case BMR
+   *   subtraction is reintroduced via a tunable.
    * @returns {{
    *   stepBonus:number, workoutBonus:number,
    *   bonusUncapped:number, bonusApplied:number, capped:boolean,
@@ -841,7 +847,6 @@ class GoalService {
    *   breakdown:{
    *     netSteps:number,
    *     workouts:Array<{kcal_burned:number, duration_min:number,
-   *                     bmr_during:number, net_kcal:number,
    *                     contribution:number}>
    *   }
    * }}
@@ -857,28 +862,22 @@ class GoalService {
     const safeSteps = Number.isFinite(netSteps) && netSteps > 0 ? netSteps : 0;
     const stepBonus = safeSteps * this.DYNAMIC.STEP_COEF;
 
-    const bmrPerMin = rmrPerDay / 1440;
     const workoutBreakdown = [];
     let workoutBonus = 0;
     for (const w of workouts || []) {
-      // Skip malformed entries — without both kcal and duration we can't
-      // net out BMR-during-workout, so crediting them risks inflating the
-      // bonus from bad sync payloads. Logged in the breakdown as a no-op
-      // would be noisy; dropping them is cleaner.
+      // Skip malformed entries — without kcal and duration we can't
+      // surface a meaningful breakdown row. Dropping them is cleaner
+      // than crediting bad-sync payloads with an unverifiable estimate.
       if (!w || !Number.isFinite(w.calories_burned) || !Number.isFinite(w.duration_min)) {
         continue;
       }
-      const kcal = w.calories_burned;
+      const kcal = Math.max(0, w.calories_burned);
       const dur = w.duration_min;
-      const bmrDuring = bmrPerMin * dur;
-      const netKcal = Math.max(0, kcal - bmrDuring);
-      const contribution = netKcal * this.DYNAMIC.WORKOUT_HAIRCUT;
+      const contribution = kcal * this.DYNAMIC.WORKOUT_HAIRCUT;
       workoutBonus += contribution;
       workoutBreakdown.push({
         kcal_burned: Math.round(kcal),
         duration_min: Math.round(dur),
-        bmr_during: Math.round(bmrDuring),
-        net_kcal: Math.round(netKcal),
         contribution: Math.round(contribution)
       });
     }
