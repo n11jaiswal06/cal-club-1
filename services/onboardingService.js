@@ -3,6 +3,37 @@ const UserQuestion = require('../models/schemas/UserQuestion');
 const UserLog = require('../models/schemas/UserLog');
 const mongoose = require('mongoose');
 const { createNotificationPreferencesFromString } = require('../models/notificationPreference');
+const { validateTargetWeight } = require('./targetWeightValidator');
+
+// CAL-33: structured 422 error for cross-field onboarding validation. The
+// onboarding controller serializes `errors` (and the matching server-driven
+// copy) so the FE can render targeted helper text per field/code instead of
+// a flat string.
+class OnboardingValidationError extends Error {
+  constructor(errors) {
+    super('Onboarding answers failed validation');
+    this.name = 'OnboardingValidationError';
+    this.errors = Array.isArray(errors) ? errors : [];
+  }
+}
+
+// Canonical question identities used by CAL-33 cross-field validation.
+// CAL-30 introduced slugs as the stable identity; the pinned hexes here
+// are kept ONLY as a fallback for long-lived envs that minted the
+// canonical _ids during the original CAL-9 seed and may not yet have
+// run scripts/backfill_question_slugs.js.
+//
+// resolveCanonicalQuestionIds() resolves all three slugs in one query
+// and returns the actual `_id`s present in the connected DB. The
+// validator uses the resolved ids to match incoming answer payloads,
+// not the pinned hexes — so on a fresh deploy where slug-pinning ran
+// but the canonical hex was never minted, the FE's slug-derived
+// questionId still matches.
+const CANONICAL_SLUG_TO_PINNED_ID = Object.freeze({
+  target_weight: '6908fe66896ccf24778c907f',
+  height_weight: '6908fe66896ccf24778c9079',
+  goal_type: '6908fe66896ccf24778c907d'
+});
 
 class OnboardingService {
   /**
@@ -192,7 +223,7 @@ class OnboardingService {
           _id: notificationQuestionId,
           isActive: true
         })
-          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
+          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf validation')
           .lean();
         
         return question ? [question] : [];
@@ -267,7 +298,7 @@ class OnboardingService {
           isActive: true,
         })
           .sort({ sequence: 1 })
-          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
+          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf validation')
           .lean();
 
         // Fetch end questions
@@ -276,7 +307,7 @@ class OnboardingService {
           isActive: true
         })
           .sort({ sequence: 1 })
-          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf')
+          .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf validation')
           .lean();
 
         // Combine: plan questions first, then end questions
@@ -286,10 +317,135 @@ class OnboardingService {
       // Default behavior: return all active questions
       return await Question.find({ isActive: true })
         .sort({ sequence: 1 })
-        .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf');
+        .select('_id slug text subtext type options sequence image infoScreen choicePreview healthPermissionPriming dataImport skipIf validation');
     } catch (error) {
       throw new Error(`Failed to fetch active questions: ${error.message}`);
     }
+  }
+
+  // CAL-33: resolve canonical question _ids by slug in a single query,
+  // falling back to the pinned hex when the slug isn't set on the doc.
+  // Returns a map of { slug → ObjectId-string } so the validator matches
+  // incoming answer payloads against the actual `_id` present in this
+  // DB, not a hardcoded hex that may not have been minted on a fresh
+  // deploy. Pinned hexes only fire when the slug backfill (CAL-30) has
+  // not yet run on the connected DB.
+  static async resolveCanonicalQuestionIds() {
+    const slugs = Object.keys(CANONICAL_SLUG_TO_PINNED_ID);
+    const docs = await Question.find({ slug: { $in: slugs } })
+      .select('_id slug validation')
+      .lean();
+
+    const out = {};
+    const validationMap = {};
+    for (const slug of slugs) {
+      const bySlug = docs.find(d => d.slug === slug);
+      if (bySlug) {
+        out[slug] = String(bySlug._id);
+        validationMap[slug] = bySlug.validation || null;
+      } else {
+        out[slug] = CANONICAL_SLUG_TO_PINNED_ID[slug];
+      }
+    }
+    return { ids: out, validation: validationMap };
+  }
+
+  // CAL-33: cross-field validation of submitted target weight against the
+  // user's goal direction and current weight. Runs BEFORE persisting any
+  // UserQuestion rows so a 422 is returned without partial writes. When
+  // the target-weight question isn't in the payload, this is a no-op.
+  //
+  // Resolution order for the two cross-field inputs:
+  //   • goal value: prefer the goal-type answer in the same payload; fall
+  //     back to the user's most recent UserQuestion answer for that
+  //     question. Onboarding submits answers question-by-question, so the
+  //     stored prior answer is the realistic source.
+  //   • current weight: prefer the height/weight answer in the same
+  //     payload; fall back to the most recent UserLog WEIGHT entry, then
+  //     the most recent height/weight UserQuestion answer.
+  //
+  // The Question.validation payload (set by the CAL-33 migration) carries
+  // the absolute bounds, the minDeltaKg, and the server-driven copy keyed
+  // by error code. The validator returns a list of structured errors; the
+  // caller throws OnboardingValidationError to surface a 422.
+  static async validateTargetWeightAnswer(answers, resolved) {
+    // `resolved` is the output of resolveCanonicalQuestionIds() shared
+    // with saveUserAnswers's downstream side-effect blocks (target-weight
+    // persistence). Falls back to a fresh lookup when called directly.
+    const { ids, validation: validationMap } = resolved || (await this.resolveCanonicalQuestionIds());
+
+    const targetAnswer = answers.find(a => String(a.questionId) === ids.target_weight);
+    if (!targetAnswer || !Array.isArray(targetAnswer.values) || targetAnswer.values.length === 0) {
+      return;
+    }
+    const targetString = targetAnswer.values[0];
+    if (typeof targetString !== 'string') return;
+    // extractWeightFromAnswer returns null when the regex doesn't match
+    // (truly malformed payload) and a number otherwise — including 0 and
+    // negatives, which the validator catches as INVALID_NUMBER. Only the
+    // null case is a no-op for the validator; numeric values flow through.
+    const targetKg = this.extractWeightFromAnswer(targetString);
+    if (targetKg === null) return;
+
+    const validation = validationMap.target_weight;
+    if (!validation) {
+      // No validation payload seeded yet — nothing to enforce. Migration
+      // hasn't run, so we err on the side of accepting the answer rather
+      // than blocking onboarding.
+      return;
+    }
+
+    const userId = targetAnswer.userId;
+    const [goalValue, currentKg] = await Promise.all([
+      this.resolveGoalValue(userId, answers, ids.goal_type),
+      this.resolveCurrentWeightKg(userId, answers, ids.height_weight)
+    ]);
+
+    const result = validateTargetWeight({ targetKg, currentKg, goalValue, validation });
+    if (!result.valid) {
+      throw new OnboardingValidationError(result.errors);
+    }
+  }
+
+  static async resolveGoalValue(userId, answers, goalQuestionId) {
+    const inPayload = answers.find(a => String(a.questionId) === goalQuestionId);
+    if (inPayload && Array.isArray(inPayload.values) && inPayload.values.length > 0) {
+      const v = inPayload.values[0];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+    const prior = await UserQuestion.findOne({
+      userId,
+      questionId: new mongoose.Types.ObjectId(goalQuestionId),
+      deletedAt: null
+    }).sort({ createdAt: -1 }).select('values').lean();
+    const v = prior?.values?.[0];
+    return typeof v === 'string' && v.trim() ? v.trim() : null;
+  }
+
+  static async resolveCurrentWeightKg(userId, answers, heightWeightQuestionId) {
+    const inPayload = answers.find(a => String(a.questionId) === heightWeightQuestionId);
+    if (inPayload && Array.isArray(inPayload.values) && inPayload.values.length > 0) {
+      const w = this.extractWeightFromAnswer(inPayload.values[0]);
+      if (w) return w;
+    }
+    const userIdObjectId = typeof userId === 'string' ? new mongoose.Types.ObjectId(userId) : userId;
+    const log = await UserLog.findOne({ userId: userIdObjectId, type: 'WEIGHT' })
+      .sort({ date: -1 })
+      .select('value')
+      .lean();
+    const fromLog = log ? parseFloat(log.value) : NaN;
+    if (Number.isFinite(fromLog) && fromLog > 0) return fromLog;
+    const priorAnswer = await UserQuestion.findOne({
+      userId: userIdObjectId,
+      questionId: new mongoose.Types.ObjectId(heightWeightQuestionId),
+      deletedAt: null
+    }).sort({ createdAt: -1 }).select('values').lean();
+    const fromQuestion = priorAnswer?.values?.[0];
+    if (typeof fromQuestion === 'string') {
+      const w = this.extractWeightFromAnswer(fromQuestion);
+      if (w) return w;
+    }
+    return null;
   }
 
   static async saveUserAnswers(answers) {
@@ -304,6 +460,20 @@ class OnboardingService {
           throw new Error('Each answer must have userId, questionId, and values array');
         }
       }
+
+      // CAL-33: resolve canonical question _ids by slug ONCE per save
+      // so both the validator and the target-weight side-effect block
+      // below match incoming payloads against the actual `_id`s in
+      // this DB (not pinned hexes that may not have been minted on a
+      // fresh deploy). Other side-effect blocks (NAME / TARGET_GOAL /
+      // MEAL_NOTIFICATION / WEIGHT_LOG) still use the pinned hex —
+      // tracked as a follow-up; behavior is unchanged from pre-PR.
+      const canonical = await this.resolveCanonicalQuestionIds();
+
+      // CAL-33: cross-field validation must run BEFORE any persistence so
+      // that a 422 leaves the DB untouched. OnboardingValidationError
+      // propagates to the controller and serializes as a structured 422.
+      await this.validateTargetWeightAnswer(answers, canonical);
 
       // Extract unique userIds and questionIds for bulk operations
       const userIds = [...new Set(answers.map(a => a.userId))];
@@ -349,11 +519,14 @@ class OnboardingService {
         }
       }
 
-      // Update target weight if height/weight question is answered (questionId: 6908fe66896ccf24778c907f)
-      const TARGET_WEIGHT_QUESTION_ID = '6908fe66896ccf24778c907f';
+      // Update target weight if target-weight question is answered.
+      // Validation already ran in validateTargetWeightAnswer above; this
+      // path is the persistence-side effect (User.goals.targetWeight).
+      // Uses the slug-resolved `_id` so it matches the same answer the
+      // validator gated.
       const targetWeightAnswer = answers.find(answer => {
         const questionIdStr = answer.questionId?.toString();
-        return questionIdStr === TARGET_WEIGHT_QUESTION_ID;
+        return questionIdStr === canonical.ids.target_weight;
       });
 
       if (targetWeightAnswer && targetWeightAnswer.values && targetWeightAnswer.values.length > 0) {
@@ -447,6 +620,10 @@ class OnboardingService {
         results
       };
     } catch (error) {
+      // CAL-33: structured validation errors must propagate as-is so the
+      // controller can map them to 422 with field/code/message. Wrapping
+      // in a generic Error would lose the structure.
+      if (error instanceof OnboardingValidationError) throw error;
       throw new Error(`Failed to save user answers: ${error.message}`);
     }
   }
@@ -474,3 +651,4 @@ class OnboardingService {
 }
 
 module.exports = OnboardingService;
+module.exports.OnboardingValidationError = OnboardingValidationError;
