@@ -109,4 +109,51 @@ describe('User.goals schema (CAL-21 fields)', () => {
     }).validateSync();
     expect(err).toBeUndefined();
   });
+
+  describe('CAL-44 macro recipe fields', () => {
+    test('weightGoalType accepts all four enum values', () => {
+      for (const v of ['lose', 'maintain', 'gain', 'recomp']) {
+        const err = buildUser({ weightGoalType: v }).validateSync();
+        expect(err && err.errors && err.errors['goals.weightGoalType']).toBeUndefined();
+      }
+    });
+
+    test('weightGoalType rejects invalid enum', () => {
+      const err = buildUser({ weightGoalType: 'cut' }).validateSync();
+      expect(err.errors['goals.weightGoalType']).toBeDefined();
+      expect(err.errors['goals.weightGoalType'].kind).toBe('enum');
+    });
+
+    test('weightKg range — accepts 70, rejects negative and > 500', () => {
+      expect(buildUser({ weightKg: 70 }).validateSync()).toBeUndefined();
+      expect(buildUser({ weightKg: -1 }).validateSync().errors['goals.weightKg'].kind).toBe('min');
+      expect(buildUser({ weightKg: 501 }).validateSync().errors['goals.weightKg'].kind).toBe('max');
+    });
+
+    test('proteinGramsPerKg range — accepts 2.0, rejects > 5', () => {
+      expect(buildUser({ proteinGramsPerKg: 2.0 }).validateSync()).toBeUndefined();
+      expect(buildUser({ proteinGramsPerKg: 6 }).validateSync().errors['goals.proteinGramsPerKg'].kind).toBe('max');
+    });
+
+    test('fatPctFloor range — accepts 0.25, rejects > 1', () => {
+      expect(buildUser({ fatPctFloor: 0.25 }).validateSync()).toBeUndefined();
+      expect(buildUser({ fatPctFloor: 1.5 }).validateSync().errors['goals.fatPctFloor'].kind).toBe('max');
+    });
+
+    test('fatGramsPerKgFloor default = 0.6 when unset', () => {
+      const u = buildUser({});
+      expect(u.goals.fatGramsPerKgFloor).toBe(0.6);
+    });
+
+    test('full CAL-44 dynamic combo passes validation', () => {
+      const err = buildUser({
+        dailyCalories: 1540, dailyProtein: 140, dailyCarbs: 149, dailyFats: 43,
+        goalType: 'dynamic', intent: 'dynamic', outcome: 'dynamic',
+        baselineGoal: 1540, rmr: 1500,
+        weightKg: 70, weightGoalType: 'lose',
+        proteinGramsPerKg: 2.0, fatPctFloor: 0.25, fatGramsPerKgFloor: 0.6
+      }).validateSync();
+      expect(err).toBeUndefined();
+    });
+  });
 });

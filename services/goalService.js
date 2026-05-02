@@ -63,6 +63,30 @@ class GoalService {
       very_active: 1.725,
       extra_active: 1.9
     };
+
+    // CAL-44: macro recipe by weight-goal type. Hoisted out of
+    // calculateAdaptiveMacros so the goal-save path can read these
+    // coefficients to persist on User.goals (proteinGramsPerKg / fatPctFloor)
+    // and the per-day computeTodaysMacros path can stay decoupled from
+    // weightGoalType — it just takes the coefficients directly.
+    //   protein_factor — g protein per kg body weight (preserves lean mass).
+    //   fat_pct        — fat as fraction of calorie target (hormonal floor).
+    // recomp = maintenance kcal with high protein + generous fat since
+    // calories aren't restricted; lose/gain trim fat to free room for the
+    // calorie deficit/surplus.
+    this.MACRO_CONFIGS = {
+      lose:     { protein_factor: 2.0, fat_pct: 0.25 },
+      maintain: { protein_factor: 1.6, fat_pct: 0.30 },
+      gain:     { protein_factor: 2.2, fat_pct: 0.25 },
+      recomp:   { protein_factor: 2.0, fat_pct: 0.30 }
+    };
+
+    // CAL-44: hormonal-health lower bound on fat in g/kg body weight.
+    // Wins over fat_pct × todaysGoal when the calorie ceiling is low
+    // enough that the % path would drop below this floor. Default for
+    // both the goal-save path and the per-day path; persisted on User
+    // .goals.fatGramsPerKgFloor for forward-compat with future tunes.
+    this.DEFAULT_FAT_G_PER_KG_FLOOR = 0.6;
   }
 
   /**
@@ -314,40 +338,14 @@ class GoalService {
    * @returns {Object} Macro targets in grams
    */
   calculateAdaptiveMacros({ calorie_target, weight_kg, goal_type }) {
-    const macroConfigs = {
-      'lose': { protein_factor: 2.0, fat_pct: 0.25 },
-      'maintain': { protein_factor: 1.6, fat_pct: 0.30 },
-      'gain': { protein_factor: 2.2, fat_pct: 0.25 },
-      // Recomposition: maintenance kcal with high protein for muscle
-      // preservation and generous fat since calories aren't restricted.
-      'recomp': { protein_factor: 2.0, fat_pct: 0.30 }
-    };
-
-    const config = macroConfigs[goal_type] || macroConfigs['maintain'];
-    
-    // Protein calculation
-    const protein_g = config.protein_factor * weight_kg;
-    const protein_kcal = 4 * protein_g;
-
-    // Fat calculation (with minimum floor)
-    const fat_kcal_floor = Math.max(
-      config.fat_pct * calorie_target,
-      9 * 0.6 * weight_kg  // Minimum 0.6 g/kg
-    );
-    const fat_g = fat_kcal_floor / 9;
-
-    // Carb calculation (remaining calories)
-    const carb_kcal = calorie_target - protein_kcal - fat_kcal_floor;
-    const carb_g = carb_kcal / 4;
-
-    return {
-      protein_g: Math.round(protein_g),
-      fat_g: Math.round(fat_g),
-      carb_g: Math.round(carb_g),
-      protein_kcal: Math.round(protein_kcal),
-      fat_kcal: Math.round(fat_kcal_floor),
-      carb_kcal: Math.round(carb_kcal)
-    };
+    const config = this.MACRO_CONFIGS[goal_type] || this.MACRO_CONFIGS['maintain'];
+    return this.computeTodaysMacros({
+      todaysGoal: calorie_target,
+      weight_kg,
+      protein_factor: config.protein_factor,
+      fat_pct_floor: config.fat_pct,
+      fat_g_per_kg_floor: this.DEFAULT_FAT_G_PER_KG_FLOOR
+    });
   }
 
   /**
@@ -903,6 +901,67 @@ class GoalService {
         netSteps: Math.round(safeSteps),
         workouts: workoutBreakdown
       }
+    };
+  }
+
+  /**
+   * CAL-44: Per-day macro split for dynamic users. Pure / deterministic /
+   * idempotent — same inputs always produce the same output, no I/O.
+   *
+   * Same formula as calculateAdaptiveMacros (which now delegates here),
+   * with three behavioural differences:
+   *   1) takes the recipe coefficients directly (so callers don't need
+   *      to know about MACRO_CONFIGS), and
+   *   2) returns null on invalid inputs instead of throwing — mirrors
+   *      the orchestrator-friendly nullable contract used in /app/calendar
+   *      and /app/progress, where a missing recipe just means "fall back
+   *      to flat persisted goals," not "error."
+   *   3) carbs clamp at 0 — guards against contrived very-low calorie
+   *      ceilings where protein_kcal + fat_kcal would over-shoot. The
+   *      calorie floor (1200/1400) makes this rare; clamp keeps the math
+   *      total-coherent (protein + fat ≤ todaysGoal) at the cost of a tiny
+   *      undershoot vs. todaysGoal in that corner.
+   *
+   * @param {Object} params
+   * @param {number} params.todaysGoal - Day's calorie ceiling (kcal). For
+   *   static users, pass dailyCalories; for dynamic users, pass
+   *   dynamicGoal.todaysGoal (baseline + bonus).
+   * @param {number} params.weight_kg - User's body weight (User.goals.weightKg
+   *   for dynamic users, body.weight_kg for the goal-save path).
+   * @param {number} params.protein_factor - g protein per kg body weight.
+   * @param {number} params.fat_pct_floor - fat as fraction of todaysGoal.
+   * @param {number} [params.fat_g_per_kg_floor=0.6] - lower bound on fat in
+   *   g/kg, applies when fat_pct_floor × todaysGoal would go below it.
+   * @returns {Object|null} {protein_g, fat_g, carb_g, protein_kcal,
+   *   fat_kcal, carb_kcal} (all rounded to nearest gram/kcal), or null if
+   *   any input is invalid.
+   */
+  computeTodaysMacros({ todaysGoal, weight_kg, protein_factor, fat_pct_floor, fat_g_per_kg_floor = this.DEFAULT_FAT_G_PER_KG_FLOOR }) {
+    if (!Number.isFinite(todaysGoal) || todaysGoal <= 0) return null;
+    if (!Number.isFinite(weight_kg) || weight_kg <= 0) return null;
+    if (!Number.isFinite(protein_factor) || protein_factor <= 0) return null;
+    if (!Number.isFinite(fat_pct_floor) || fat_pct_floor <= 0) return null;
+    if (!Number.isFinite(fat_g_per_kg_floor) || fat_g_per_kg_floor < 0) return null;
+
+    const protein_g = protein_factor * weight_kg;
+    const protein_kcal = 4 * protein_g;
+
+    const fat_kcal = Math.max(
+      fat_pct_floor * todaysGoal,
+      9 * fat_g_per_kg_floor * weight_kg
+    );
+    const fat_g = fat_kcal / 9;
+
+    const carb_kcal = Math.max(0, todaysGoal - protein_kcal - fat_kcal);
+    const carb_g = carb_kcal / 4;
+
+    return {
+      protein_g: Math.round(protein_g),
+      fat_g: Math.round(fat_g),
+      carb_g: Math.round(carb_g),
+      protein_kcal: Math.round(protein_kcal),
+      fat_kcal: Math.round(fat_kcal),
+      carb_kcal: Math.round(carb_kcal)
     };
   }
 }

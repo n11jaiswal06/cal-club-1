@@ -121,6 +121,50 @@ const userSchema = new mongoose.Schema({
       type: Number,
       min: 0,
       max: 10000
+    },
+    // CAL-44: dynamic-macros recipe. For dynamic users, daily macros are
+    // recomputed per-render from this recipe + todaysGoal so carbs absorb
+    // the activity bonus and protein/fat stay coherent with the moving
+    // calorie ceiling. Static users leave these undefined and continue to
+    // render the flat dailyProtein/dailyFats/dailyCarbs above.
+    //
+    // - weightKg: snapshot at goal-save. Re-derived only on the next
+    //   /goals/calculate-and-save — not refreshed against the latest
+    //   UserLog WEIGHT entry per render. Bodyweight drift between saves
+    //   is acceptable; the ticket calls protein "invariant modulo
+    //   bodyweight changes."
+    // - weightGoalType: lose/maintain/gain/recomp. Distinct from goalType
+    //   above ('dynamic'/'static'); naming overlap is the same one already
+    //   called out in the CAL-21 comment block.
+    // - proteinGramsPerKg / fatPctFloor / fatGramsPerKgFloor: the three
+    //   coefficients that drove the original calculateAdaptiveMacros math
+    //   for this user. Persisting them — instead of just goal_type — keeps
+    //   the per-day path self-contained and lets us tune the table without
+    //   having to recompute every dynamic user.
+    weightKg: {
+      type: Number,
+      min: 0,
+      max: 500
+    },
+    weightGoalType: {
+      type: String,
+      enum: ['lose', 'maintain', 'gain', 'recomp']
+    },
+    proteinGramsPerKg: {
+      type: Number,
+      min: 0,
+      max: 5
+    },
+    fatPctFloor: {
+      type: Number,
+      min: 0,
+      max: 1
+    },
+    fatGramsPerKgFloor: {
+      type: Number,
+      min: 0,
+      max: 5,
+      default: 0.6
     }
   },
   isActive: {

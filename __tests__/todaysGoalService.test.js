@@ -17,7 +17,7 @@ jest.mock('../services/activityStoreService', () => ({
 }));
 
 const ActivityStoreService = require('../services/activityStoreService');
-const { buildTodaysGoal, sumDailySteps, flattenWorkouts } = require('../services/todaysGoalService');
+const { buildTodaysGoal, buildTodaysMacros, sumDailySteps, flattenWorkouts } = require('../services/todaysGoalService');
 
 function makeUser(overrides = {}) {
   return {
@@ -245,5 +245,108 @@ describe('todaysGoalService — pure helpers', () => {
     const docs = [{ data: [{ duration_min: 30 }] }];
     const workouts = flattenWorkouts(docs);
     expect(workouts[0].calories_burned).toBe(0);
+  });
+});
+
+// CAL-44: per-day macro orchestrator. Mirrors buildTodaysGoal's "null on
+// static / missing fields" contract so the format layer can fall back to
+// flat persisted goals without a try/catch.
+describe('todaysGoalService.buildTodaysMacros — gating', () => {
+  function makeRecipeUser(overrides = {}) {
+    return {
+      _id: new mongoose.Types.ObjectId(),
+      goals: {
+        goalType: 'dynamic',
+        weightKg: 70,
+        weightGoalType: 'lose',
+        proteinGramsPerKg: 2.0,
+        fatPctFloor: 0.25,
+        fatGramsPerKgFloor: 0.6,
+        ...overrides
+      }
+    };
+  }
+
+  test('static user → null', () => {
+    const user = makeRecipeUser({ goalType: 'static' });
+    expect(buildTodaysMacros(user, 2000)).toBeNull();
+  });
+
+  test('null user → null', () => {
+    expect(buildTodaysMacros(null, 2000)).toBeNull();
+    expect(buildTodaysMacros(undefined, 2000)).toBeNull();
+  });
+
+  test('dynamic user missing weightKg → null (recipe incomplete)', () => {
+    const user = makeRecipeUser({ weightKg: undefined });
+    expect(buildTodaysMacros(user, 2000)).toBeNull();
+  });
+
+  test('dynamic user missing proteinGramsPerKg → null', () => {
+    const user = makeRecipeUser({ proteinGramsPerKg: undefined });
+    expect(buildTodaysMacros(user, 2000)).toBeNull();
+  });
+
+  test('dynamic user missing fatPctFloor → null', () => {
+    const user = makeRecipeUser({ fatPctFloor: undefined });
+    expect(buildTodaysMacros(user, 2000)).toBeNull();
+  });
+
+  test('todaysGoal missing → null', () => {
+    const user = makeRecipeUser();
+    expect(buildTodaysMacros(user, undefined)).toBeNull();
+    expect(buildTodaysMacros(user, 0)).toBeNull();
+  });
+
+  test('fatGramsPerKgFloor missing → falls back to 0.6 (legacy users)', () => {
+    const user = makeRecipeUser({ fatGramsPerKgFloor: undefined });
+    const result = buildTodaysMacros(user, 1540);
+    expect(result).not.toBeNull();
+    // Same as ticket sedentary day with 0.6 floor: protein 140, fat 43, carbs 149.
+    expect(result.protein.goal_g).toBe(140);
+    expect(result.fat.goal_g).toBe(43);
+    expect(result.carbs.goal_g).toBe(149);
+  });
+});
+
+describe('todaysGoalService.buildTodaysMacros — happy path', () => {
+  function makeRecipeUser(overrides = {}) {
+    return {
+      _id: new mongoose.Types.ObjectId(),
+      goals: {
+        goalType: 'dynamic',
+        weightKg: 70,
+        weightGoalType: 'lose',
+        proteinGramsPerKg: 2.0,
+        fatPctFloor: 0.25,
+        fatGramsPerKgFloor: 0.6,
+        ...overrides
+      }
+    };
+  }
+
+  test('ticket sedentary (todaysGoal=1540) → 140p / 43f / 149c', () => {
+    const user = makeRecipeUser();
+    const result = buildTodaysMacros(user, 1540);
+    expect(result).toEqual({
+      protein: { goal_g: 140, goal_kcal: 560 },
+      fat:     { goal_g: 43,  goal_kcal: 385 },
+      carbs:   { goal_g: 149, goal_kcal: 595 }
+    });
+  });
+
+  test('ticket active (todaysGoal=2310) → 140p / 64f / 293c', () => {
+    const user = makeRecipeUser();
+    const result = buildTodaysMacros(user, 2310);
+    expect(result.protein.goal_g).toBe(140);            // protein invariant
+    expect(result.fat.goal_g).toBe(64);
+    // ticket approximated as ~280; actual residual = (2310-560-577.5)/4 = 293
+    expect(result.carbs.goal_g).toBe(293);
+  });
+
+  test('shape — each macro returns {goal_g, goal_kcal} only', () => {
+    const result = buildTodaysMacros(makeRecipeUser(), 2000);
+    expect(Object.keys(result)).toEqual(['protein', 'fat', 'carbs']);
+    expect(Object.keys(result.protein)).toEqual(['goal_g', 'goal_kcal']);
   });
 });
