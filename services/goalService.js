@@ -682,15 +682,6 @@ class GoalService {
     const baselineResult = this.computeDynamicBaseline(inputs);
     const { baseline, floor, floor_applied } = baselineResult;
 
-    // Static row: pin activity_level + zero out workout fields so two
-    // requests with the same demographics always produce the same static
-    // value, regardless of whatever optional v2 fields the caller passes.
-    const staticResult = this.computeTargetsV2({
-      ...inputs,
-      activity_level: this.DYNAMIC.PREVIEW_STATIC_ACTIVITY_LEVEL,
-      workouts_per_week: 0
-    });
-
     // baseline is already on the 5-grid (computeDynamicBaseline) and the
     // step/workout offsets are integer multiples of 5 (3000×0.05=150,
     // 8000×0.05=400, 250×0.5=125), so the sums stay on the 5-grid. The
@@ -707,8 +698,23 @@ class GoalService {
         this.DYNAMIC.PREVIEW_WORKOUT_KCAL * this.DYNAMIC.WORKOUT_HAIRCUT
     );
 
+    // CAL-25: static preview = arithmetic mean of the three dynamic day
+    // outcomes. Visualizes Static as "an approximation across activity
+    // levels" and keeps the marker visually inside the dynamic range on
+    // the choice screen, so the position and the label always agree.
+    //
+    // NOTE: this is *only* the preview value. The actual Static goal a
+    // user gets after onboarding is still computed by /goals/calculate-
+    // and-save using their selected activity_level, so a very-active
+    // picker will get a higher final number than the preview, and a
+    // sedentary picker a lower one. The preview deliberately trades
+    // per-user precision for a clean cross-day average view.
+    const staticPreview = Math.round(
+      (dynamic_rest + dynamic_active + dynamic_workout) / 3
+    );
+
     return {
-      static: staticResult.calorie_target,
+      static: staticPreview,
       dynamic_baseline: baseline,
       dynamic_rest,
       dynamic_active,
