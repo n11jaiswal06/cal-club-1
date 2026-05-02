@@ -321,13 +321,12 @@ async function migrate({ apply }) {
   // 1) Find the goal-type question (Q10).
   const { q: goalQ, foundBy } = await findGoalQuestion();
   if (!goalQ) {
-    console.error(
-      '✗ Goal-type question not found by slug, _id pin, sequence:10, or ' +
+    throw new Error(
+      'Goal-type question not found by slug, _id pin, sequence:10, or ' +
       'fingerprint. Run the original seed (onboarding_questions_mongodb.js) ' +
-      "first, then run scripts/backfill_question_slugs.js, then re-run this " +
+      'first, then run scripts/backfill_question_slugs.js, then re-run this ' +
       'migration. (Lookup result: ' + foundBy + ')'
     );
-    process.exit(1);
   }
   console.log(`Q10 (goal type) located via ${foundBy}: _id=${goalQ._id}, seq=${goalQ.sequence}`);
   if (foundBy !== 'pinned-id') {
@@ -687,4 +686,5 @@ module.exports = {
   looksLikeGoalQuestion,
   findGoalQuestion,
   assertSlugBackfillRun,
+  migrate,
 };
