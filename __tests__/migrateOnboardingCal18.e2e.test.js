@@ -120,18 +120,30 @@ describe('CAL-18 migrate({ apply: true })', () => {
 
       const afterFirst = await Question.find({}).lean().sort({ sequence: 1 });
       const firstCount = afterFirst.length;
-      // Strip Mongoose-managed fields that change on every write so we can
-      // compare structural equality across runs.
+      // Strip Mongoose-managed timestamp fields before comparing. The
+      // CAL-31 acceptance phrases idempotency as "modifiedCount === 0 on
+      // re-run", but that metric isn't directly reachable here: Question
+      // has `{ timestamps: true }` and the migration's runOp uses
+      // Mongoose's default updateOne, which auto-injects $set:{updatedAt:
+      // now} on every call. Mongo then sees the doc as changed and reports
+      // modifiedCount: 1 even when no semantic field differs.
+      //
+      // What's actually verifiable — and what matters operationally — is
+      // that the second run produces no data drift: same row count, same
+      // _ids, identical content. That's what this snapshot asserts.
       const stripVolatile = (doc) => {
         const { updatedAt, createdAt, __v, ...rest } = doc;
         return rest;
       };
       const firstSnapshot = afterFirst.map(stripVolatile);
+      const firstIds = afterFirst.map((d) => String(d._id)).sort();
 
       await migrate({ apply: true });
 
       const afterSecond = await Question.find({}).lean().sort({ sequence: 1 });
+      const secondIds = afterSecond.map((d) => String(d._id)).sort();
       expect(afterSecond).toHaveLength(firstCount);
+      expect(secondIds).toEqual(firstIds);
       expect(afterSecond.map(stripVolatile)).toEqual(firstSnapshot);
     });
   });
