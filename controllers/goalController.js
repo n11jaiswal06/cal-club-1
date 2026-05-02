@@ -329,6 +329,23 @@ async function choicePreview(req, res) {
 
     console.log('Choice-preview request:', JSON.stringify(body, null, 2));
 
+    // CAL-36 follow-up: same DOB-derivation as calculate-and-save (PR #54).
+    // Goal Settings re-entry no longer asks DOB and stops sending age_years
+    // from this surface, but choice-preview still needs an age to compute
+    // the four numbers. Auth middleware now attaches req.user when a JWT
+    // is present (anonymous initial onboarding still falls through), so we
+    // can look up User.dateOfBirth and derive age. Body wins when present.
+    if (body && (body.age_years === undefined || body.age_years === null) &&
+        req.user && req.user.userId) {
+      const User = require('../models/schemas/User');
+      const { dobToAgeYears } = require('../services/onboardingService');
+      const userDoc = await User.findById(req.user.userId).select('dateOfBirth').lean();
+      const derived = dobToAgeYears(userDoc && userDoc.dateOfBirth);
+      if (derived !== null) {
+        body.age_years = derived;
+      }
+    }
+
     const validation = goalService.validateInputs(body);
     if (!validation.valid) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
