@@ -7,6 +7,13 @@
     "dev": "node index.js",
     "test": "jest"
   },
+  "jest": {
+    "testTimeout": 30000,
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/__tests__/helpers/"
+    ]
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -35,6 +42,7 @@
     "@types/mongodb": "^4.0.6",
     "@types/node": "^24.1.0",
     "jest": "^30.3.0",
+    "mongodb-memory-server": "^10.1.4",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"
   }
