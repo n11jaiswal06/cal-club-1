@@ -14,7 +14,12 @@ class OnboardingController {
       const url = new URL(req.url, `http://${req.headers.host}`);
       const type = url.searchParams.get('type');
       
-      const questions = await OnboardingService.getActiveQuestions(type);
+      // CAL-36: pass through the optional userId so PLAN_CREATION can drop
+      // questions the user already has on file (DOB). req.user is set by
+      // middleware/auth when a valid JWT accompanies the request; absent
+      // for anonymous sign-up calls, in which case the full list is
+      // returned.
+      const questions = await OnboardingService.getActiveQuestions(type, req.user?.userId);
       
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({

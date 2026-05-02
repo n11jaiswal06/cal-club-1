@@ -30,6 +30,14 @@ const userSchema = new mongoose.Schema({
       message: props => `${props.value} is not a valid email!`
     }
   },
+  // CAL-36: User date of birth, captured from the onboarding DOB question
+  // (Question _id 6908fe66896ccf24778c907a) and persisted here so the Goal
+  // Settings sub-flow can suppress the DOB ask when re-entered from
+  // Profile. Backfilled from existing UserQuestion answers by
+  // scripts/migrate_user_dob_cal36.js.
+  dateOfBirth: {
+    type: Date
+  },
   goals: {
     goal: {
       type: String,

@@ -35,6 +35,11 @@ const CANONICAL_SLUG_TO_PINNED_ID = Object.freeze({
   goal_type: '6908fe66896ccf24778c907d'
 });
 
+// CAL-36: pinned DOB question id. Used both by the DOB-capture side-effect
+// in saveUserAnswers and by the PLAN_CREATION filter in
+// getActiveQuestions (drops the question once User.dateOfBirth is set).
+const DOB_QUESTION_ID = '6908fe66896ccf24778c907a';
+
 class OnboardingService {
   /**
    * Extract weight from answer string
@@ -116,6 +121,54 @@ class OnboardingService {
       }
     } catch (error) {
       console.error('Error updating user name:', error);
+    }
+  }
+
+  /**
+   * CAL-36: Persist the onboarding DOB answer onto User.dateOfBirth so the
+   * Goal Settings sub-flow can suppress the DOB ask on Profile re-entry.
+   * Background side-effect of saveUserAnswers — failures are logged and
+   * swallowed (matches updateUserName / updateUserTargetWeight). The DOB
+   * question (id 6908fe66896ccf24778c907a) is type=DATE; values[0] is
+   * typically an ISO date string from the FE date picker. Anything
+   * `new Date()` can't parse, or a year outside 1900..currentYear, is
+   * rejected without touching the User doc.
+   * @param {string} userId
+   * @param {string|number|Date} dobValue
+   */
+  static async updateUserDateOfBirth(userId, dobValue) {
+    try {
+      const User = require('../models/schemas/User');
+
+      const parsed = new Date(dobValue);
+      if (Number.isNaN(parsed.getTime())) {
+        console.warn(`⚠️ Skipping DOB update for user ${userId}: unparseable value ${JSON.stringify(dobValue)}`);
+        return;
+      }
+      const year = parsed.getUTCFullYear();
+      const currentYear = new Date().getUTCFullYear();
+      if (year < 1900 || year > currentYear) {
+        console.warn(`⚠️ Skipping DOB update for user ${userId}: year ${year} out of range (1900..${currentYear})`);
+        return;
+      }
+
+      const userIdObjectId = typeof userId === 'string'
+        ? new mongoose.Types.ObjectId(userId)
+        : userId;
+
+      const updatedUser = await User.findByIdAndUpdate(
+        userIdObjectId,
+        { dateOfBirth: parsed },
+        { new: true }
+      );
+
+      if (updatedUser) {
+        console.log(`✅ Updated dateOfBirth for user ${userId}: ${parsed.toISOString()}`);
+      } else {
+        console.warn(`⚠️ User not found: ${userId}`);
+      }
+    } catch (error) {
+      console.error('Error updating user dateOfBirth:', error);
     }
   }
 
@@ -213,7 +266,7 @@ class OnboardingService {
     }
   }
 
-  static async getActiveQuestions(type = null) {
+  static async getActiveQuestions(type = null, userId = null) {
     try {
       // If type is "NOTIFICATIONS", return only the meal timing question
       if (type === 'NOTIFICATIONS') {
@@ -311,7 +364,22 @@ class OnboardingService {
           .lean();
 
         // Combine: plan questions first, then end questions
-        return [...planQuestions, ...endQuestions];
+        let combined = [...planQuestions, ...endQuestions];
+
+        // CAL-36: when an authenticated user re-enters Goal Settings from
+        // Profile, drop the DOB question if we already have it on file.
+        // Anonymous (initial onboarding) callers always see the full list
+        // because userId is null until sign-up completes. Single cheap
+        // lookup; only on PLAN_CREATION; only when authenticated.
+        if (userId) {
+          const User = require('../models/schemas/User');
+          const user = await User.findById(userId).select('dateOfBirth').lean();
+          if (user && user.dateOfBirth) {
+            combined = combined.filter(q => String(q._id) !== DOB_QUESTION_ID);
+          }
+        }
+
+        return combined;
       }
       
       // Default behavior: return all active questions
@@ -584,6 +652,25 @@ class OnboardingService {
               console.error('Background user name update failed:', err);
             });
           }
+        }
+      }
+
+      // CAL-36: persist DOB answer to User.dateOfBirth so the Goal Settings
+      // sub-flow can suppress the DOB ask on Profile re-entry. Same
+      // fire-and-forget posture as the NAME / TARGET_WEIGHT blocks above.
+      // DOB_QUESTION_ID is declared at module scope (used by the
+      // PLAN_CREATION filter in getActiveQuestions too).
+      const dobAnswer = answers.find(answer => {
+        const questionIdStr = answer.questionId?.toString();
+        return questionIdStr === DOB_QUESTION_ID;
+      });
+
+      if (dobAnswer && dobAnswer.values && dobAnswer.values.length > 0) {
+        const dobValue = dobAnswer.values[0];
+        if (dobValue !== null && dobValue !== undefined && dobValue !== '') {
+          this.updateUserDateOfBirth(dobAnswer.userId, dobValue).catch(err => {
+            console.error('Background user dateOfBirth update failed:', err);
+          });
         }
       }
 

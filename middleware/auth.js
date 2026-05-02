@@ -9,8 +9,20 @@ function jwtMiddleware(req, res, next) {
     return next();
   }
   
-  // Allow public access to onboarding questions
-  if (req.url === '/onboarding/questions' && req.method === 'GET') {
+  // Onboarding question fetch must remain accessible during sign-up (no
+  // JWT yet), but Profile re-entry into Goal Settings sends a JWT so the
+  // controller can drop already-answered questions (CAL-36: DOB). Decode
+  // the token if present, attach req.user on success, fall through to
+  // next() otherwise — invalid/missing token is treated as anonymous.
+  if (req.url.split('?')[0] === '/onboarding/questions' && req.method === 'GET') {
+    const authHeader = req.headers['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        req.user = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+      } catch (_) {
+        // Anonymous fallback.
+      }
+    }
     return next();
   }
 
