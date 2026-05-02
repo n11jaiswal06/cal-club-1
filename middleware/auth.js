@@ -39,10 +39,22 @@ function jwtMiddleware(req, res, next) {
       }
 
       // Allow unauthenticated access to goal calculation endpoints (read-only)
-      // But require auth for calculate-and-save since it modifies user data
+      // But require auth for calculate-and-save since it modifies user data.
+      // CAL-36 follow-up: same posture as /onboarding/questions — decode the
+      // JWT if present so /goals/choice-preview can fall back to
+      // User.dateOfBirth when Goal Settings re-entry stops sending age_years.
+      // Anonymous (initial onboarding) callers still go through.
       if (req.url.startsWith('/goals/') && !req.url.includes('/calculate-and-save')) {
-    return next();
-  }
+        const authHeader = req.headers['authorization'];
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+          try {
+            req.user = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+          } catch (_) {
+            // Anonymous fallback.
+          }
+        }
+        return next();
+      }
   const authHeader = req.headers['authorization'];
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     res.writeHead(401, { 'Content-Type': 'application/json' });
