@@ -13,6 +13,13 @@ function jwtMiddleware(req, res, next) {
   if (req.url === '/onboarding/questions' && req.method === 'GET') {
     return next();
   }
+
+  // CAL-32: stateless skipIf evaluator runs pre-auth (sign-up comes after
+  // onboarding). The client carries answers in the request body; the server
+  // reads no per-user state.
+  if (req.url === '/onboarding/questions/applicability' && req.method === 'POST') {
+    return next();
+  }
   
       // Allow unauthenticated access to webhook endpoints
       if (req.url.startsWith('/webhooks/') && req.method === 'POST') {

@@ -232,3 +232,85 @@ All endpoints include comprehensive error handling:
 - Input validation and sanitization
 - Soft deletion prevents data loss
 - Unique constraints prevent duplicate answers
+
+## Conditional Branching: `skipIf` Semantics
+
+Each question may carry a `skipIf` array of rules that hide the question when a prior answer matches. The rules are **data**, evaluated server-side so every consumer (Flutter, web, agent, internal tools) shares one implementation.
+
+### Rule shape
+
+```javascript
+skipIf: [
+  {
+    questionId: ObjectId,   // a previously-answered question
+    valueIn:    [String],   // semantic match against option.value (preferred)
+    textIn:     [String]    // legacy fallback: matches option.text
+  }
+]
+```
+
+### Evaluation rules
+
+1. **OR across the array.** A question is skipped if **any** rule matches. (There is no AND, NOT, or numeric comparison — see CAL-32 out-of-scope notes.)
+2. **`valueIn` precedence.** Within a single rule, when `valueIn` is non-empty it is the only matcher consulted. `textIn` is ignored on that rule. Rules authored before semantic option values existed used `textIn` only; those continue to work.
+3. **`textIn` resolution (legacy fallback).** When a rule has only `textIn`, each prior `value` is mapped to its `option.text` via the referenced question's `options`. The mapped text is then tested against `textIn`. If no option carries the prior value (truly legacy data where the stored value is itself display text), the raw value is tested against `textIn` directly.
+4. **Missing prior answer.** If the user has not yet answered the rule's `questionId` (or submitted an empty `values` array), no rule on it can match → the question stays applicable.
+
+### Examples (from current seeds)
+
+| Question | Rule | Effect |
+| --- | --- | --- |
+| Target weight (Q11) | `valueIn: ['maintain', 'recomp']` against goal | Hidden for maintain & recomp users |
+| Loss-rate (13.3) | `valueIn: ['gain', 'recomp', 'maintain']` against goal | Shown only for `lose` |
+| Gain-rate (13.5) | `valueIn: ['lose', 'recomp', 'maintain']` against goal | Shown only for `gain` |
+| Recomp expectation (13.7) | `valueIn: ['lose', 'gain', 'maintain']` against goal | Shown only for `recomp` |
+| Health priming / Data import | `valueIn: ['static']` against the dynamic-vs-static choice | Hidden when the user picks the static plan |
+
+## Applicability Endpoint (CAL-32)
+
+A stateless evaluator that returns the active question list annotated with `applicable` per question, computed against the answers the client is currently carrying. Use this in place of re-implementing `skipIf` on the client.
+
+**POST** `/onboarding/questions/applicability` — **public** (no auth). Onboarding runs before sign-up, so the server cannot read stored answers; the client carries them in the request body.
+
+**Request body:**
+```json
+{
+  "type": "PLAN_CREATION",
+  "answers": [
+    { "questionId": "6908fe66896ccf24778c907d", "values": ["maintain"] }
+  ]
+}
+```
+- `type` (optional) — one of `PLAN_CREATION`, `NOTIFICATIONS`, or omit to receive every active question.
+- `answers` (required) — the in-progress answer draft. Each entry has a string `questionId` (valid ObjectId hex) and an array `values`.
+
+**Response:**
+```json
+{
+  "success": true,
+  "count": 12,
+  "data": [
+    {
+      "_id": "...",
+      "slug": "goal_type",
+      "text": "What's your primary goal?",
+      "skipIf": [],
+      "applicable": true
+    },
+    {
+      "_id": "...",
+      "slug": "target_weight",
+      "text": "What's your target weight?",
+      "skipIf": [{ "questionId": "...", "valueIn": ["maintain", "recomp"] }],
+      "applicable": false
+    }
+  ]
+}
+```
+The fields per question are exactly what `GET /onboarding/questions` returns, plus `applicable: boolean`.
+
+**Errors:** `400` for non-array `answers`, missing/invalid `questionId`, non-array `values`, or unknown `type`. `500` for unexpected failures.
+
+**When to call.** Client should call the endpoint whenever the in-progress answer set changes (i.e. after each answered question), then advance to the next question with `applicable: true` in `sequence` order. The endpoint is idempotent and side-effect-free, so it is safe to call as often as the UI demands.
+
+**Offline.** Clients may keep a thin local fallback evaluator for offline scenarios; the documented semantics above are the contract.
