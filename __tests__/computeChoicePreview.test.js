@@ -82,6 +82,22 @@ describe('goalService.computeChoicePreview — invariants', () => {
     expect(b.dynamic_baseline).toBe(a.dynamic_baseline);
   });
 
+  test('CAL-25: static preview equals the arithmetic mean of the three dynamic days', () => {
+    // The choice screen positions the Static marker at the mean of the
+    // three dynamic outcomes so it visually reads as "an approximation
+    // across activity levels." Pin that identity here so a future change
+    // can't silently drift the formula back toward BMR × PAL.
+    const inputs = {
+      sex_at_birth: 'female', age_years: 30, height_cm: 161.76, weight_kg: 70,
+      goal_type: 'lose', pace_kg_per_week: -0.35,
+    };
+    const r = goalService.computeChoicePreview(inputs);
+    const expectedStatic = Math.round(
+      (r.dynamic_rest + r.dynamic_active + r.dynamic_workout) / 3
+    );
+    expect(r.static).toBe(expectedStatic);
+  });
+
   test('meta surfaces tunable assumptions for client disclosure copy', () => {
     const result = goalService.computeChoicePreview({
       sex_at_birth: 'female', age_years: 30, height_cm: 161.76, weight_kg: 70,

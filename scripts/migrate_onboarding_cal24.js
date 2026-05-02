@@ -41,7 +41,7 @@ const CHOICE_OPTIONS = [
   },
   {
     text: 'Static',
-    subtext: 'The same goal every day. Predictable. No health data needed.',
+    subtext: "Stays the same every day. Won't adapt to your daily activity.",
     value: 'static',
   },
 ];
