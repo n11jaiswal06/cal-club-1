@@ -37,8 +37,31 @@ class GoalService {
       // static lifestyle questions (PRD §8 / CAL-26 fallback routing), so
       // the caller never has a real activity_level — we always pin this
       // constant. Tunable here if telemetry shows users typically land
-      // somewhere other than 'active' in the static flow.
-      PREVIEW_STATIC_ACTIVITY_LEVEL: 'active'
+      // somewhere other than 'moderately_active' in the static flow.
+      PREVIEW_STATIC_ACTIVITY_LEVEL: 'moderately_active'
+    };
+
+    // CAL-35: Standard activity multipliers (PAL bands). Each band's
+    // multiplier × RMR yields TDEE — bakes in both NEAT and typical EAT
+    // for that lifestyle, so we no longer ask workouts/week separately.
+    //
+    // Empirical basis (so we can defend the numbers):
+    //   FAO/WHO/UNU 1985 + 2001 expert consultations on human energy
+    //   requirements; IOM 2002 DRI report; popularized by McArdle/Katch/
+    //   Katch *Exercise Physiology*. Values derived from doubly-labeled-
+    //   water studies measuring real free-living TDEE across activity
+    //   strata.
+    //
+    // Self-report inflation is well-documented (Tooze 2007, Schoeller
+    // 1995): users tend to pick one band higher than reality. The seed's
+    // option subtext should lean conservative; this constant doesn't
+    // need to change to compensate.
+    this.ACTIVITY_MULTIPLIERS = {
+      sedentary: 1.2,
+      lightly_active: 1.375,
+      moderately_active: 1.55,
+      very_active: 1.725,
+      extra_active: 1.9
     };
   }
 
@@ -281,44 +304,9 @@ class GoalService {
     }
   }
 
-  /**
-   * Calculate NEAT (Non-Exercise Activity Thermogenesis) based on activity level
-   * @param {Object} params - {rmr, activity_level}
-   * @returns {number} NEAT calories per day
-   */
-  calculateNEAT({ rmr, activity_level }) {
-    const neatMultipliers = {
-      'sedentary': 0.10,    // +10%
-      'light': 0.20,        // +20%
-      'active': 0.30,       // +30%
-      'very_active': 0.40,  // +40%
-      'dynamic': 0.30       // +30% (midpoint)
-    };
-
-    const neatPct = neatMultipliers[activity_level] || 0.30;
-    return rmr * neatPct;
-  }
-
-  /**
-   * Calculate EAT (Exercise Activity Thermogenesis) for structured workouts
-   * @param {Object} params - {weight_kg, workouts_per_week, avg_workout_duration_min, avg_workout_intensity}
-   * @returns {number} Daily EAT calories
-   */
-  calculateEAT({ weight_kg, workouts_per_week, avg_workout_duration_min, avg_workout_intensity }) {
-    const metValues = {
-      'low': 3.5,
-      'moderate': 7.0,
-      'high': 9.5
-    };
-
-    const met = metValues[avg_workout_intensity] || 7.0;
-    const duration_hours = (avg_workout_duration_min || 45) / 60;
-    
-    const eatPerSession = met * weight_kg * duration_hours;
-    const eatDaily = (workouts_per_week * eatPerSession) / 7;
-    
-    return eatDaily;
-  }
+  // CAL-35 removed calculateNEAT and calculateEAT. The v2 path now uses
+  // a single activity multiplier (ACTIVITY_MULTIPLIERS) that bakes both
+  // NEAT and typical EAT into one band, replacing the custom % split.
 
   /**
    * Calculate adaptive macros based on goal type
@@ -418,6 +406,18 @@ class GoalService {
         }
       }
 
+      // CAL-35: TDEE = RMR × ACTIVITY_MULTIPLIER. The multiplier bakes in
+      // both NEAT and typical EAT for the band, so workouts/week is no
+      // longer a separate input. See ACTIVITY_MULTIPLIERS comment for
+      // the empirical basis.
+      const multiplier = this.ACTIVITY_MULTIPLIERS[inputs.activity_level];
+      if (multiplier === undefined) {
+        throw new Error(
+          `Invalid activity_level '${inputs.activity_level}'. ` +
+          `Expected one of: ${Object.keys(this.ACTIVITY_MULTIPLIERS).join(', ')}`
+        );
+      }
+
       // 1) Calculate RMR using Mifflin-St Jeor
       const rmr = this.calculateRMR({
         sex_at_birth: inputs.sex_at_birth,
@@ -426,24 +426,10 @@ class GoalService {
         weight_kg: inputs.weight_kg
       });
 
-      // 2) Calculate NEAT based on activity level
-      const neat_kcal = this.calculateNEAT({
-        rmr,
-        activity_level: inputs.activity_level || 'active'
-      });
+      // 2) TDEE = RMR × multiplier. PAL band bakes in NEAT + typical EAT.
+      const tdee = rmr * multiplier;
 
-      // 3) Calculate EAT for structured workouts
-      const eat_kcal = this.calculateEAT({
-        weight_kg: inputs.weight_kg,
-        workouts_per_week: inputs.workouts_per_week || 0,
-        avg_workout_duration_min: inputs.avg_workout_duration_min || 45,
-        avg_workout_intensity: inputs.avg_workout_intensity || 'moderate'
-      });
-
-      // 4) Calculate TDEE
-      const tdee = rmr + neat_kcal + eat_kcal;
-
-      // 5) Calculate goal adjustment.
+      // 3) Calculate goal adjustment.
       //    PRD §6.2: recomp is maintenance kcal regardless of any pace input.
       //    Coerce pace to 0 for the calc; validateInputs surfaces a warning
       //    when the client sent a non-zero value, so the override is visible.
@@ -452,14 +438,14 @@ class GoalService {
       const daily_kcal_delta = weekly_kcal_delta / 7;
       const calorie_target = tdee + daily_kcal_delta;
 
-      // 6) Calculate adaptive macros
+      // 4) Calculate adaptive macros
       const macros = this.calculateAdaptiveMacros({
         calorie_target,
         weight_kg: inputs.weight_kg,
         goal_type: inputs.goal_type
       });
 
-      // 7) Apply guardrails
+      // 5) Apply guardrails
       const guardrailResult = this.applyV2Guardrails({
         calorie_target,
         rmr,
@@ -469,7 +455,7 @@ class GoalService {
         weight_kg: inputs.weight_kg
       });
 
-      // 8) Round final values
+      // 6) Round final values
       const rounded = this.roundValues({
         calorie_target: guardrailResult.calorie_target,
         protein_g: guardrailResult.protein_g,
@@ -477,12 +463,12 @@ class GoalService {
         carb_g: macros.carb_g
       });
 
-      // 9) Prepare final result
+      // 7) Prepare final result. neat_kcal/eat_kcal removed (no longer split);
+      // tdee is the single derived intermediate.
       const result = {
         rmr: Math.round(rmr),
-        neat_kcal: Math.round(neat_kcal),
-        eat_kcal: Math.round(eat_kcal),
         tdee: Math.round(tdee),
+        activity_multiplier: multiplier,
         daily_kcal_delta: Math.round(daily_kcal_delta),
         calorie_target: rounded.calorie_target,
         macros: {
@@ -499,10 +485,7 @@ class GoalService {
           weight_kg: inputs.weight_kg,
           goal_type: inputs.goal_type,
           pace_kg_per_week: inputs.pace_kg_per_week,
-          activity_level: inputs.activity_level || 'active',
-          workouts_per_week: inputs.workouts_per_week || 0,
-          avg_workout_duration_min: inputs.avg_workout_duration_min || 45,
-          avg_workout_intensity: inputs.avg_workout_intensity || 'moderate'
+          activity_level: inputs.activity_level
         }
       };
 
@@ -531,21 +514,29 @@ class GoalService {
     const errors = [];
     const warnings = [];
 
-    // Required field validation
+    // Required field validation. CAL-35: activity_level is now strict-enum
+    // against the standard PAL bands (matches ACTIVITY_MULTIPLIERS keys).
     const required = {
       sex_at_birth: { type: 'enum', values: ['male', 'female'] },
       age_years: { type: 'number', min: 13, max: 80 },
       height_cm: { type: 'number', min: 120, max: 220 },
       weight_kg: { type: 'number', min: 35, max: 250 },
       goal_type: { type: 'enum', values: ['lose', 'maintain', 'gain', 'recomp'] },
-      pace_kg_per_week: { type: 'number', min: -1.5, max: 1.5 }
+      pace_kg_per_week: { type: 'number', min: -1.5, max: 1.5 },
+      activity_level: {
+        type: 'enum',
+        values: ['sedentary', 'lightly_active', 'moderately_active', 'very_active', 'extra_active'],
+        optional: true  // computeTargetsV2 enforces presence; computeChoicePreview / computeDynamicBaseline don't need it.
+      }
     };
 
     for (const [field, rules] of Object.entries(required)) {
       const value = inputs[field];
-      
+
       if (value === undefined || value === null) {
-        errors.push(`Missing required field: ${field}`);
+        if (!rules.optional) {
+          errors.push(`Missing required field: ${field}`);
+        }
         continue;
       }
 
@@ -562,12 +553,10 @@ class GoalService {
       }
     }
 
-    // Optional field validation
-    if (inputs.workouts_per_week !== undefined) {
-      if (typeof inputs.workouts_per_week !== 'number' || inputs.workouts_per_week < 0 || inputs.workouts_per_week > 14) {
-        errors.push('workouts_per_week must be between 0 and 14');
-      }
-    }
+    // CAL-35: workouts_per_week, avg_workout_duration_min, and
+    // avg_workout_intensity were inputs to the old NEAT+EAT model and
+    // are no longer required or validated. Standard activity multipliers
+    // bake exercise into the activity_level band.
 
     if (inputs.desired_weight_kg !== undefined) {
       if (typeof inputs.desired_weight_kg !== 'number' || inputs.desired_weight_kg < 30 || inputs.desired_weight_kg > 250) {

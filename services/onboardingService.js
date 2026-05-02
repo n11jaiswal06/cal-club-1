@@ -230,8 +230,11 @@ class OnboardingService {
         //     Sequence is the migration's actual canonical key, so we use it.
         const stableQuestionIds = [
           '6908fe66896ccf24778c9075', // Choose your gender
-          '6908fe66896ccf24778c9076', // How many workouts do you do per week?
-          '6908fe66896ccf24778c9077', // What's your typical day like?
+          // CAL-35: '6908fe66896ccf24778c9076' (workouts/week) is now isActive:false
+          // — standard activity multipliers bake exercise into the band, so a
+          // separate workouts question would double-count. Removed from the
+          // chain entirely; the migration deactivates the row.
+          '6908fe66896ccf24778c9077', // What's your typical activity level? (CAL-35; was "typical day")
           '6908fe66896ccf24778c9079', // What's your height and weight?
           '6908fe66896ccf24778c907a', // What's your date of birth?
           '6908fe66896ccf24778c907d', // What's your primary goal? (CAL-18)

@@ -68,18 +68,21 @@ describe("getActiveQuestions('PLAN_CREATION') — lookup wiring", () => {
     const idClause = planFilter.$or.find((c) => c._id);
     const ids = idClause._id.$in.map((oid) => String(oid));
 
-    // Demographics + goal + target weight (CAL-18 era).
+    // Demographics + goal + target weight. CAL-35 dropped workouts/wk
+    // (6908fe66896ccf24778c9076) — standard activity multipliers bake
+    // exercise into the activity-level band, so a separate workouts
+    // question would double-count.
     expect(ids).toEqual(
       expect.arrayContaining([
         '6908fe66896ccf24778c9075', // gender
-        '6908fe66896ccf24778c9076', // workouts/wk
-        '6908fe66896ccf24778c9077', // typical day
+        '6908fe66896ccf24778c9077', // typical activity level (rewritten copy in CAL-35)
         '6908fe66896ccf24778c9079', // height + weight
         '6908fe66896ccf24778c907a', // dob
         '6908fe66896ccf24778c907d', // primary goal
         '6908fe66896ccf24778c907f', // target weight
       ])
     );
+    expect(ids).not.toContain('6908fe66896ccf24778c9076');
 
     // CAL-24 trio (migration upserts these by _id, so they're stable).
     expect(ids).toEqual(

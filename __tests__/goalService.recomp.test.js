@@ -85,12 +85,12 @@ describe('goalService — recomp goal type', () => {
       expect(result.daily_kcal_delta).toBe(0);
     });
 
-    test('female 65kg sedentary recomp → exact calorie target 1500 (rounded TDEE, no floor)', () => {
+    test('female 65kg sedentary recomp → exact calorie target 1625 (rounded TDEE, no floor)', () => {
+      // CAL-35: standard activity multipliers replace NEAT+EAT.
       // RMR = 10*65 + 6.25*165 - 5*32 - 161 = 1360.25
-      // NEAT (sedentary) = 1360.25 * 0.10 = 136.025
-      // TDEE = 1496.275 → floor doesn't bind → round to 25 = 1500
+      // TDEE (sedentary) = 1360.25 * 1.2 = 1632.3 → round to 25 = 1625
       const result = goalService.computeTargetsV2(recompInputs);
-      expect(result.calorie_target).toBe(1500);
+      expect(result.calorie_target).toBe(1625);
     });
 
     test('protein target = exactly 2.0 g/kg (rounded to nearest 5g)', () => {
@@ -99,13 +99,14 @@ describe('goalService — recomp goal type', () => {
       expect(result.macros.protein_g).toBe(130);
     });
 
-    test('fat target = exactly 30% of calorie target (rounded to nearest 5g)', () => {
+    test('fat target ≈ 30% of calorie target (rounded to nearest 5g)', () => {
       const result = goalService.computeTargetsV2(recompInputs);
-      // 0.30 * 1500 / 9 = 50.0 → rounds to 50; the 0.6 g/kg floor (39g)
+      // 0.30 * 1625 / 9 = 54.17 → rounds to 55; the 0.6 g/kg floor (39g)
       // does NOT bind here.
-      expect(result.macros.fat_g).toBe(50);
-      // Sanity: fat_kcal / calorie_target lands exactly on 30% for this fixture.
-      expect((result.macros.fat_g * 9) / result.calorie_target).toBeCloseTo(0.30, 4);
+      expect(result.macros.fat_g).toBe(55);
+      // Sanity: fat_kcal / calorie_target stays near 30% (rounding nudges
+      // it to ~30.5% for this fixture).
+      expect((result.macros.fat_g * 9) / result.calorie_target).toBeCloseTo(0.30, 1);
     });
 
     test('returns goal_type: recomp in the input echo', () => {
@@ -123,7 +124,7 @@ describe('goalService — recomp goal type', () => {
       });
       expect(result.daily_kcal_delta).toBe(0);
       // Same calorie target as the pace=0 case — proves the coercion landed.
-      expect(result.calorie_target).toBe(1500);
+      expect(result.calorie_target).toBe(1625);
     });
 
     test('negative pace input still yields zero daily delta', () => {
@@ -133,14 +134,14 @@ describe('goalService — recomp goal type', () => {
         pace_kg_per_week: -0.5,
       });
       expect(result.daily_kcal_delta).toBe(0);
-      expect(result.calorie_target).toBe(1500);
+      expect(result.calorie_target).toBe(1625);
     });
   });
 
   describe('computeTargetsV2 — floor binds for low-TDEE recomp inputs', () => {
     test('female 40kg/150cm/70yo recomp → 1200 floor binds, warning emitted', () => {
       // RMR = 10*40 + 6.25*150 - 5*70 - 161 = 826.5
-      // TDEE (sedentary) = 826.5 * 1.10 = 909.15 → floor 1200 binds → 1200.
+      // TDEE (sedentary 1.2) = 991.8 → floor 1200 binds → 1200.
       const result = goalService.computeTargetsV2({
         sex_at_birth: 'female',
         age_years: 70,
@@ -159,7 +160,7 @@ describe('goalService — recomp goal type', () => {
 
     test('male 50kg/150cm/70yo recomp → 1400 floor binds, warning emitted', () => {
       // RMR = 10*50 + 6.25*150 - 5*70 + 5 = 1092.5
-      // TDEE (sedentary) = 1201.75 → floor 1400 binds → 1400.
+      // TDEE (sedentary 1.2) = 1311 → floor 1400 binds → 1400.
       const result = goalService.computeTargetsV2({
         sex_at_birth: 'male',
         age_years: 70,
@@ -177,17 +178,17 @@ describe('goalService — recomp goal type', () => {
     });
   });
 
-  describe('computeTargetsV2 — recomp across all activity levels', () => {
+  describe('computeTargetsV2 — recomp across all activity levels (CAL-35 multipliers)', () => {
     // For the female 65kg/165cm/32yo recomp fixture:
     //   RMR = 1360.25
-    //   TDEE = RMR * (1 + NEAT_multiplier)
+    //   TDEE = RMR × ACTIVITY_MULTIPLIER (CAL-35 standard PAL bands)
     //   calorie_target = round(TDEE / 25) * 25 (no floor binds)
     const cases = [
-      { activity_level: 'sedentary',   neat_multiplier: 0.10, expected: 1500 },
-      { activity_level: 'light',       neat_multiplier: 0.20, expected: 1625 },
-      { activity_level: 'active',      neat_multiplier: 0.30, expected: 1775 },
-      { activity_level: 'very_active', neat_multiplier: 0.40, expected: 1900 },
-      { activity_level: 'dynamic',     neat_multiplier: 0.30, expected: 1775 },
+      { activity_level: 'sedentary',         multiplier: 1.2,   expected: 1625 },
+      { activity_level: 'lightly_active',    multiplier: 1.375, expected: 1875 },
+      { activity_level: 'moderately_active', multiplier: 1.55,  expected: 2100 },
+      { activity_level: 'very_active',       multiplier: 1.725, expected: 2350 },
+      { activity_level: 'extra_active',      multiplier: 1.9,   expected: 2575 },
     ];
 
     test.each(cases)(
@@ -206,5 +207,16 @@ describe('goalService — recomp goal type', () => {
         expect(result.macros.protein_g).toBe(130);
       }
     );
+
+    test('rejects out-of-band activity_level with a clear error', () => {
+      expect(() =>
+        goalService.computeTargetsV2({
+          ...baseInputs,
+          activity_level: 'desk',
+          goal_type: 'recomp',
+          pace_kg_per_week: 0,
+        })
+      ).toThrow(/Invalid activity_level 'desk'/);
+    });
   });
 });
