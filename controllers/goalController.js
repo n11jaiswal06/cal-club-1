@@ -147,6 +147,22 @@ async function calculateAndSaveGoals(req, res) {
 
     console.log('Calculate and save goals request:', JSON.stringify(body, null, 2));
 
+    // CAL-36 follow-up: derive age_years from User.dateOfBirth when the
+    // payload omits it. PR #53 stopped re-asking DOB on Goal Settings
+    // re-entry by filtering the question for users with dateOfBirth on
+    // file; the FE can now also stop sending age_years from that flow.
+    // Initial onboarding still sends age_years explicitly, so the fallback
+    // is intentionally body-wins.
+    if (body && (body.age_years === undefined || body.age_years === null)) {
+      const User = require('../models/schemas/User');
+      const { dobToAgeYears } = require('../services/onboardingService');
+      const userDoc = await User.findById(userId).select('dateOfBirth').lean();
+      const derived = dobToAgeYears(userDoc && userDoc.dateOfBirth);
+      if (derived !== null) {
+        body.age_years = derived;
+      }
+    }
+
     // Validate inputs first
     const validation = goalService.validateInputs(body);
     if (!validation.valid) {

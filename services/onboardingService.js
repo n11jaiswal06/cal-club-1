@@ -56,6 +56,23 @@ function parseDob(raw) {
   return parsed;
 }
 
+// CAL-36 follow-up: derive completed years from a DOB to feed goalService
+// (which validates `age_years` 13..80). Returns null on a falsy/unparseable
+// input so the caller can fall back to the request body or surface a
+// missing-field error. UTC math throughout to match parseDob.
+function dobToAgeYears(dob) {
+  if (!dob) return null;
+  const d = dob instanceof Date ? dob : new Date(dob);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  let age = now.getUTCFullYear() - d.getUTCFullYear();
+  const beforeBirthdayThisYear =
+    now.getUTCMonth() < d.getUTCMonth() ||
+    (now.getUTCMonth() === d.getUTCMonth() && now.getUTCDate() < d.getUTCDate());
+  if (beforeBirthdayThisYear) age -= 1;
+  return age;
+}
+
 class OnboardingService {
   /**
    * Extract weight from answer string
@@ -753,3 +770,4 @@ module.exports.OnboardingValidationError = OnboardingValidationError;
 module.exports.DOB_QUESTION_ID = DOB_QUESTION_ID;
 module.exports.MIN_DOB_YEAR = MIN_DOB_YEAR;
 module.exports.parseDob = parseDob;
+module.exports.dobToAgeYears = dobToAgeYears;
