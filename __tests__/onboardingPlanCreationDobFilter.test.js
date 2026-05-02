@@ -13,8 +13,7 @@ const {
 const User = require('../models/schemas/User');
 const Question = require('../models/schemas/Question');
 const OnboardingService = require('../services/onboardingService');
-
-const DOB_QUESTION_ID = '6908fe66896ccf24778c907a';
+const { DOB_QUESTION_ID } = require('../services/onboardingService');
 
 let logSpy, errSpy;
 

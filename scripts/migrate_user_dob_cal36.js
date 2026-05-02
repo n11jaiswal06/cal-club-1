@@ -22,9 +22,11 @@ require('dotenv').config();
 
 const User = require('../models/schemas/User');
 const UserQuestion = require('../models/schemas/UserQuestion');
-
-const DOB_QUESTION_ID = '6908fe66896ccf24778c907a';
-const MIN_YEAR = 1900;
+const {
+  DOB_QUESTION_ID,
+  MIN_DOB_YEAR: MIN_YEAR,
+  parseDob,
+} = require('../services/onboardingService');
 
 function getMongoUri() {
   const uri =
@@ -48,21 +50,6 @@ function isStandaloneTransactionError(err) {
   return /transaction numbers are only allowed|replica set|standalone/i.test(msg);
 }
 
-// Parse a raw DOB answer value (typically an ISO date string from the FE
-// date picker, but could be a Date instance or epoch millis from a
-// hand-edited row). Returns null on anything `new Date()` can't parse or
-// a year outside MIN_YEAR..currentYear (filters stray timestamps that
-// look like ms-since-epoch, etc.).
-function parseDob(raw) {
-  if (raw === null || raw === undefined || raw === '') return null;
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return null;
-  const year = parsed.getUTCFullYear();
-  const currentYear = new Date().getUTCFullYear();
-  if (year < MIN_YEAR || year > currentYear) return null;
-  return parsed;
-}
-
 // Walk every active DOB answer, parse it, and build a list of
 // { userId, dateOfBirth } pairs ready for bulkWrite. Logs a warning for
 // each row that fails to parse so an operator can investigate.
@@ -81,8 +68,9 @@ async function collectBackfillPairs() {
     const raw = Array.isArray(row.values) ? row.values[0] : null;
     const parsed = parseDob(raw);
     if (!parsed) {
+      // PII: don't log the raw value — userId is enough to investigate.
       console.warn(
-        `  ⚠ Skipping userId=${row.userId} — unparseable/out-of-range DOB value: ${JSON.stringify(raw)}`
+        `  ⚠ Skipping userId=${row.userId} — unparseable/out-of-range DOB value`
       );
       skipped += 1;
       continue;
@@ -96,9 +84,10 @@ async function collectBackfillPairs() {
 async function previewSample(pairs) {
   const sample = pairs.slice(0, 3);
   if (sample.length === 0) return;
+  // PII: list user ids only, not the dateOfBirth values themselves.
   console.log(`\nSample of ${sample.length} planned update(s):`);
   for (const p of sample) {
-    console.log(`  _id=${p.userId} → dateOfBirth=${p.dateOfBirth.toISOString()}`);
+    console.log(`  _id=${p.userId} → dateOfBirth=<set>`);
   }
 }
 
@@ -209,7 +198,6 @@ if (require.main === module) {
 module.exports = {
   DOB_QUESTION_ID,
   MIN_YEAR,
-  parseDob,
   collectBackfillPairs,
   applyUpdate,
 };

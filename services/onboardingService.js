@@ -32,13 +32,29 @@ class OnboardingValidationError extends Error {
 const CANONICAL_SLUG_TO_PINNED_ID = Object.freeze({
   target_weight: '6908fe66896ccf24778c907f',
   height_weight: '6908fe66896ccf24778c9079',
-  goal_type: '6908fe66896ccf24778c907d'
+  goal_type: '6908fe66896ccf24778c907d',
+  date_of_birth: '6908fe66896ccf24778c907a'
 });
 
-// CAL-36: pinned DOB question id. Used both by the DOB-capture side-effect
-// in saveUserAnswers and by the PLAN_CREATION filter in
-// getActiveQuestions (drops the question once User.dateOfBirth is set).
-const DOB_QUESTION_ID = '6908fe66896ccf24778c907a';
+// CAL-36: pinned DOB question id. Used by the DOB-capture side-effect in
+// saveUserAnswers, by the PLAN_CREATION filter in getActiveQuestions, and
+// by the backfill migration / tests (re-exported below).
+const DOB_QUESTION_ID = CANONICAL_SLUG_TO_PINNED_ID.date_of_birth;
+const MIN_DOB_YEAR = 1900;
+
+// CAL-36: parse a raw DOB answer value into a Date, or null if it can't be
+// parsed or the year is outside MIN_DOB_YEAR..currentYear. Shared between
+// the runtime side-effect (updateUserDateOfBirth) and the backfill
+// migration so both apply the exact same validation.
+function parseDob(raw) {
+  if (raw === null || raw === undefined || raw === '') return null;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const year = parsed.getUTCFullYear();
+  const currentYear = new Date().getUTCFullYear();
+  if (year < MIN_DOB_YEAR || year > currentYear) return null;
+  return parsed;
+}
 
 class OnboardingService {
   /**
@@ -140,15 +156,10 @@ class OnboardingService {
     try {
       const User = require('../models/schemas/User');
 
-      const parsed = new Date(dobValue);
-      if (Number.isNaN(parsed.getTime())) {
-        console.warn(`⚠️ Skipping DOB update for user ${userId}: unparseable value ${JSON.stringify(dobValue)}`);
-        return;
-      }
-      const year = parsed.getUTCFullYear();
-      const currentYear = new Date().getUTCFullYear();
-      if (year < 1900 || year > currentYear) {
-        console.warn(`⚠️ Skipping DOB update for user ${userId}: year ${year} out of range (1900..${currentYear})`);
+      const parsed = parseDob(dobValue);
+      if (!parsed) {
+        // PII: don't log dobValue itself.
+        console.warn(`⚠️ Skipping DOB update for user ${userId}: unparseable or out-of-range value`);
         return;
       }
 
@@ -163,7 +174,7 @@ class OnboardingService {
       );
 
       if (updatedUser) {
-        console.log(`✅ Updated dateOfBirth for user ${userId}: ${parsed.toISOString()}`);
+        console.log(`✅ Updated dateOfBirth for user ${userId}`);
       } else {
         console.warn(`⚠️ User not found: ${userId}`);
       }
@@ -739,3 +750,6 @@ class OnboardingService {
 
 module.exports = OnboardingService;
 module.exports.OnboardingValidationError = OnboardingValidationError;
+module.exports.DOB_QUESTION_ID = DOB_QUESTION_ID;
+module.exports.MIN_DOB_YEAR = MIN_DOB_YEAR;
+module.exports.parseDob = parseDob;

@@ -14,8 +14,7 @@ const {
 const User = require('../models/schemas/User');
 const Question = require('../models/schemas/Question');
 const OnboardingService = require('../services/onboardingService');
-
-const DOB_QUESTION_ID = '6908fe66896ccf24778c907a';
+const { DOB_QUESTION_ID } = require('../services/onboardingService');
 
 let logSpy, warnSpy, errSpy;
 
@@ -70,7 +69,7 @@ describe('updateUserDateOfBirth', () => {
     const refreshed = await User.findById(user._id).lean();
     expect(refreshed.dateOfBirth == null).toBe(true);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/unparseable value/i)
+      expect.stringMatching(/unparseable or out-of-range/i)
     );
   });
 
@@ -81,7 +80,7 @@ describe('updateUserDateOfBirth', () => {
     const refreshed = await User.findById(user._id).lean();
     expect(refreshed.dateOfBirth == null).toBe(true);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/out of range/i)
+      expect.stringMatching(/unparseable or out-of-range/i)
     );
   });
 
@@ -93,7 +92,7 @@ describe('updateUserDateOfBirth', () => {
     const refreshed = await User.findById(user._id).lean();
     expect(refreshed.dateOfBirth == null).toBe(true);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/out of range/i)
+      expect.stringMatching(/unparseable or out-of-range/i)
     );
   });
 
