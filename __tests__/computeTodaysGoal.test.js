@@ -1,16 +1,19 @@
 // Tests for goalService.computeTodaysGoal (CAL-23).
 //
-// PRD §7.4 daily-flex math: today's_goal = baselineGoal + activity_bonus
+// today's_goal = baselineGoal + activity_bonus
 // where activity_bonus = step_bonus + workout_bonus, capped at 50% of
 // baselineGoal.
 //
 //   step_bonus    = netSteps × STEP_COEF (0.05 kcal/step)
-//   workout_bonus = Σ max(0, kcal − rmr/1440 × duration) × WORKOUT_HAIRCUT (0.5)
+//   workout_bonus = Σ kcal × WORKOUT_HAIRCUT (0.5)
 //
-// All cases below verify the pure-function contract: deterministic,
-// idempotent, no I/O. Acceptance criteria from CAL-23: zero-activity day,
-// workout-only day, cap-binding extreme day, manual-workout, workout-window
-// step dedup, idempotency.
+// CAL-23 follow-up: BMR-during-workout subtraction was removed in favor of
+// a flat 50% haircut on raw calories burned. The simpler "half of what you
+// burn" model matches user mental model and avoids the HealthKit
+// active-vs-total double-subtraction bug. Source asymmetry between manual
+// (MET-based, total energy) and HealthKit (active energy, net of BMR) is
+// ~30-50 kcal per workout — well under the noise of MET tables and Apple's
+// energy estimates.
 
 const goalService = require('../services/goalService');
 
@@ -47,26 +50,26 @@ describe('goalService.computeTodaysGoal — CAL-23 daily flex', () => {
     expect(result.capped).toBe(false);
   });
 
-  test('workout-only day → workout_bonus = (kcal − rmr/1440 × dur) × 0.5', () => {
-    // 30-min workout @ 250 kcal. BMR-during = 1500/1440 × 30 = 31.25.
-    // Net = 218.75. Contribution = 109.375 → rounds to 109.
+  test('workout-only day → workout_bonus = kcal × 0.5', () => {
+    // 30-min workout @ 250 kcal. Contribution = 250 × 0.5 = 125.
     const result = goalService.computeTodaysGoal({
       ...baseUser,
       netSteps: 0,
       workouts: [{ calories_burned: 250, duration_min: 30 }]
     });
     expect(result.stepBonus).toBe(0);
-    expect(result.workoutBonus).toBe(109);
-    expect(result.todaysGoal).toBe(2010); // 1900 + 109 = 2009 → round to 5 = 2010
+    expect(result.workoutBonus).toBe(125);
+    expect(result.todaysGoal).toBe(2025); // 1900 + 125 = 2025
     expect(result.capped).toBe(false);
     expect(result.breakdown.workouts).toHaveLength(1);
     expect(result.breakdown.workouts[0]).toMatchObject({
       kcal_burned: 250,
       duration_min: 30,
-      bmr_during: 31,
-      net_kcal: 219,
-      contribution: 109
+      contribution: 125
     });
+    // bmr_during / net_kcal removed — formula no longer uses BMR.
+    expect(result.breakdown.workouts[0].bmr_during).toBeUndefined();
+    expect(result.breakdown.workouts[0].net_kcal).toBeUndefined();
   });
 
   test('cap-binding extreme day → bonusApplied = 0.5 × baselineGoal, capped=true', () => {
@@ -132,19 +135,17 @@ describe('goalService.computeTodaysGoal — CAL-23 daily flex', () => {
     expect(a).toEqual(b);
   });
 
-  test('low-intensity workout below rest-BMR → contribution clamped to 0', () => {
-    // 60-min activity reporting only 50 kcal (e.g. wearable misclassified
-    // a slow walk as a workout). BMR-during = 62.5 → net would be negative
-    // without the max(0, …) guard.
+  test('low-kcal workout still credits half — no BMR clamp', () => {
+    // 60-min activity reporting 50 kcal. Pre-CAL-23-followup this clamped
+    // to 0 because BMR-during exceeded the kcal. Now: 50 × 0.5 = 25.
     const result = goalService.computeTodaysGoal({
       ...baseUser,
       netSteps: 0,
       workouts: [{ calories_burned: 50, duration_min: 60 }]
     });
-    expect(result.workoutBonus).toBe(0);
-    expect(result.bonusApplied).toBe(0);
-    expect(result.todaysGoal).toBe(1900);
-    expect(result.breakdown.workouts[0].net_kcal).toBe(0);
+    expect(result.workoutBonus).toBe(25);
+    expect(result.bonusApplied).toBe(25);
+    expect(result.todaysGoal).toBe(1925); // 1900 + 25
   });
 
   test('multiple workouts sum correctly', () => {
@@ -152,11 +153,11 @@ describe('goalService.computeTodaysGoal — CAL-23 daily flex', () => {
       ...baseUser,
       netSteps: 0,
       workouts: [
-        { calories_burned: 250, duration_min: 30 }, // contribution 109
-        { calories_burned: 400, duration_min: 45 }  // BMR-during=46.875, net=353.125, contribution=176.5625 → 177
+        { calories_burned: 250, duration_min: 30 }, // contribution 125
+        { calories_burned: 400, duration_min: 45 }  // contribution 200
       ]
     });
-    expect(result.workoutBonus).toBe(286); // 109 + 177
+    expect(result.workoutBonus).toBe(325); // 125 + 200
     expect(result.breakdown.workouts).toHaveLength(2);
   });
 

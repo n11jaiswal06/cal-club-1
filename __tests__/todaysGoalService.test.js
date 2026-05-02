@@ -113,8 +113,8 @@ describe('todaysGoalService.buildTodaysGoal — happy path', () => {
       return Promise.resolve([]);
     });
     const result = await buildTodaysGoal(user, '2026-05-01');
-    // (250 − 1500/1440 × 30) × 0.5 = (250 − 31.25) × 0.5 = 109.375 → 109
-    expect(result.workoutBonus).toBe(109);
+    // 250 × 0.5 = 125 (no BMR subtraction; CAL-23 follow-up)
+    expect(result.workoutBonus).toBe(125);
     expect(result.breakdown.workouts).toHaveLength(1);
     expect(result.breakdown.workouts[0].kcal_burned).toBe(250);
   });
@@ -132,8 +132,8 @@ describe('todaysGoalService.buildTodaysGoal — happy path', () => {
     });
     const result = await buildTodaysGoal(user, '2026-05-01');
     expect(result.stepBonus).toBe(200);
-    expect(result.workoutBonus).toBe(109);
-    expect(result.todaysGoal).toBe(2210); // 1900 + 200 + 109 = 2209 → round to 5 = 2210
+    expect(result.workoutBonus).toBe(125);
+    expect(result.todaysGoal).toBe(2225); // 1900 + 200 + 125 = 2225
     expect(result.capped).toBe(false);
   });
 
