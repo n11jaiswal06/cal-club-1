@@ -2,6 +2,7 @@ const OnboardingController = require('../controllers/onboardingController');
 
 const routes = {
   'GET /onboarding/questions': OnboardingController.getQuestions,
+  'POST /onboarding/questions/applicability': OnboardingController.getQuestionsApplicability,
   'POST /onboarding/answers': OnboardingController.saveAnswers,
   'GET /onboarding/answers': OnboardingController.getUserAnswers
 };
