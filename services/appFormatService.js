@@ -148,15 +148,27 @@ class AppFormatService {
       const todayIST = getTodayDateString();
       const isPastDay = date < todayIST;
 
-      // Exercise burn: one query feeds both the hero section's calorie
-      // progress bar (goal + burn = effective target) and the
-      // exercise_burn_widget rendered below.
-      const exerciseBurn = await buildExerciseBurnContext(userId, istDateStr);
+      // CAL-27/28: parallelize the two ActivityStore reads. Both
+      // queries hit the same compound index keyed on (userId, date)
+      // and have no inter-dependency; running them sequentially
+      // costs an extra round-trip on every home open.
+      //
+      // dynamicGoal is computed for any date (today or past). Past
+      // days correctly key ActivityStore by istDateStr. The current
+      // user's goalType drives the variant; if a user later flips
+      // variants, past-day rendering will retroactively follow the
+      // current variant — acceptable for V1 (app unreleased, no
+      // variant flips in prod). A goalType-history follow-up will
+      // make this strictly correct.
+      const [exerciseBurn, dynamicGoal] = await Promise.all([
+        buildExerciseBurnContext(userId, istDateStr),
+        buildTodaysGoal(user, istDateStr)
+      ]);
       todayData.exerciseBurn = exerciseBurn.totalCalories;
 
       // --- Hero section ---
       const heroSectionWidget = await this.formatHeroSectionWidget(
-        userId, date, todayData, goals, clientPhase, regenerate, isPastDay
+        userId, date, todayData, goals, clientPhase, regenerate, isPastDay, dynamicGoal
       );
 
       // Format the response
@@ -174,8 +186,13 @@ class AppFormatService {
         widgets.push(this.formatPaywallWidget());
       }
 
+      // CAL-27/28: AppBar's "calories remaining" must use the same
+      // goal denominator as the hero tile, otherwise top-bar and
+      // hero disagree by `bonusApplied` for dynamic users.
+      const appBarGoal = dynamicGoal ? dynamicGoal.todaysGoal : goals.dailyCalories;
+
       return {
-        appBarData: this.formatAppBarData(todayData, goals.dailyCalories),
+        appBarData: this.formatAppBarData(todayData, appBarGoal),
         weekViewData: this.formatWeekViewData(mondayDate, currentDate),
         daySelectorData: this.formatDaySelectorData(currentDate),
         showFloatingActionButton: true,
@@ -348,7 +365,7 @@ class AppFormatService {
    *
    * For past days, returns only the Evening Wrap with no phase tabs.
    */
-  static async formatHeroSectionWidget(userId, date, todayData, goals, clientPhase, regenerate, isPastDay) {
+  static async formatHeroSectionWidget(userId, date, todayData, goals, clientPhase, regenerate, isPastDay, dynamicGoal = null) {
     try {
       let showPhaseTabs;
       let activePhaseTabs;
@@ -393,21 +410,29 @@ class AppFormatService {
         });
       }
 
-      // Compute effective target (goal + exercise burn)
-      const exerciseBurn = todayData.exerciseBurn || 0;
-      const effectiveTarget = goals.dailyCalories + exerciseBurn;
+      // CAL-27/28: hero calorie tile. Static users get a single goal
+      // number (no burn additive — the activity multiplier already
+      // accounts for typical daily burn). Dynamic users get
+      // baseline + activity_bonus = today's_goal, with breakdown for
+      // an optional UI subline. `burn` stays in the payload as 0 for
+      // back-compat with older clients that still draw the marker.
+      // The dynamic block is nested under `dynamic` (always present,
+      // null for static) to mirror /app/progress.dynamicGoal exactly
+      // and keep the typed-client shape uniform across users.
+      const calories = {
+        consumed: parseFloat(todayData.totalCalories.toFixed(2)),
+        goal: dynamicGoal ? dynamicGoal.todaysGoal : goals.dailyCalories,
+        burn: 0,
+        goalType: dynamicGoal ? 'dynamic' : 'static',
+        dynamic: dynamicGoal
+      };
 
       return {
         widgetType: 'hero_section',
         widgetData: {
           showPhaseTabs,
           activePhaseTabs,
-          calories: {
-            consumed: parseFloat(todayData.totalCalories.toFixed(2)),
-            goal: goals.dailyCalories,
-            burn: exerciseBurn,
-            effectiveTarget
-          },
+          calories,
           protein: {
             consumed: parseFloat(todayData.totalProtein.toFixed(2)),
             goal: goals.dailyProtein
@@ -429,7 +454,8 @@ class AppFormatService {
             consumed: parseFloat((todayData?.totalCalories || 0).toFixed(2)),
             goal: goals?.dailyCalories || 2000,
             burn: 0,
-            effectiveTarget: goals?.dailyCalories || 2000
+            goalType: 'static',
+            dynamic: null
           },
           protein: {
             consumed: parseFloat((todayData?.totalProtein || 0).toFixed(2)),
